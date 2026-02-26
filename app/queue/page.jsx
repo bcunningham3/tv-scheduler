@@ -1,7 +1,78 @@
 'use client'
 import { useState, useMemo, useEffect, useRef } from "react";
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
-const supabase = createClient("https://fhmdqlustdhiacufqefl.supabase.co", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZobWRxbHVzdGRoaWFjdWZxZWZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxMTQ5MzQsImV4cCI6MjA4NzY5MDkzNH0.am0qht26J8Gp50-2BmlKSdYY0o-BzzDsm4bEYPVXTIc");
+
+// Lightweight Supabase client (no SDK import needed in artifact)
+const SUPA_URL = "https://fhmdqlustdhiacufqefl.supabase.co";
+const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZobWRxbHVzdGRoaWFjdWZxZWZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxMTQ5MzQsImV4cCI6MjA4NzY5MDkzNH0.am0qht26J8Gp50-2BmlKSdYY0o-BzzDsm4bEYPVXTIc";
+function supaHeaders(token) {
+  const h = {"Content-Type":"application/json","apikey":SUPA_KEY,"Authorization":`Bearer ${token||SUPA_KEY}`};
+  return h;
+}
+const supabase = {
+  _token: null,
+  auth: {
+    getSession: async () => {
+      try {
+        const s = localStorage.getItem("supa_session");
+        if (s) { const parsed = JSON.parse(s); supabase._token = parsed.access_token; return {data:{session:parsed}}; }
+      } catch {}
+      return {data:{session:null}};
+    },
+    onAuthStateChange: (cb) => { return {data:{subscription:{unsubscribe:()=>{}}}}; },
+    signInWithPassword: async ({email,password}) => {
+      const r = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=password`,{method:"POST",headers:{"Content-Type":"application/json","apikey":SUPA_KEY},body:JSON.stringify({email,password})});
+      const d = await r.json();
+      if (d.access_token) { supabase._token=d.access_token; try{localStorage.setItem("supa_session",JSON.stringify(d));}catch{} return {data:d,error:null}; }
+      return {data:null,error:{message:d.error_description||d.msg||"Sign in failed"}};
+    },
+    signUp: async ({email,password}) => {
+      const r = await fetch(`${SUPA_URL}/auth/v1/signup`,{method:"POST",headers:{"Content-Type":"application/json","apikey":SUPA_KEY},body:JSON.stringify({email,password})});
+      const d = await r.json();
+      if (d.id||d.email) return {data:d,error:null};
+      return {data:null,error:{message:d.error_description||d.msg||"Sign up failed"}};
+    },
+    signInWithOtp: async ({email}) => {
+      const r = await fetch(`${SUPA_URL}/auth/v1/otp`,{method:"POST",headers:{"Content-Type":"application/json","apikey":SUPA_KEY},body:JSON.stringify({email})});
+      return r.ok ? {data:{},error:null} : {data:null,error:{message:"OTP failed"}};
+    },
+    signOut: async () => { supabase._token=null; try{localStorage.removeItem("supa_session");}catch{} return {error:null}; },
+  },
+  from: (table) => ({
+    select: (cols) => ({
+      eq: (col,val) => ({
+        maybeSingle: async () => {
+          const r = await fetch(`${SUPA_URL}/rest/v1/${table}?select=${cols}&${col}=eq.${val}&limit=1`,{headers:supaHeaders(supabase._token)});
+          const d = await r.json();
+          return Array.isArray(d) ? {data:d[0]||null,error:null} : {data:null,error:d};
+        },
+        single: async () => {
+          const r = await fetch(`${SUPA_URL}/rest/v1/${table}?select=${cols}&${col}=eq.${val}&limit=1`,{headers:supaHeaders(supabase._token)});
+          const d = await r.json();
+          return Array.isArray(d) ? {data:d[0]||null,error:null} : {data:null,error:d};
+        },
+      }),
+    }),
+    upsert: (payload, opts) => ({
+      then: async (resolve) => {
+        const r = await fetch(`${SUPA_URL}/rest/v1/${table}`,{method:"POST",headers:{...supaHeaders(supabase._token),"Prefer":`resolution=${opts?.onConflict?"merge-duplicates":"ignore-duplicates"},return=minimal`},body:JSON.stringify(payload)});
+        resolve(r.ok ? {error:null} : {error:{message:"Upsert failed"}});
+      },
+    }),
+  }),
+};
+// Make upsert awaitable
+const _origFrom = supabase.from.bind(supabase);
+supabase.from = (table) => {
+  const obj = _origFrom(table);
+  obj.upsert = (payload, opts) => {
+    const promise = fetch(`${SUPA_URL}/rest/v1/${table}`,{method:"POST",headers:{...supaHeaders(supabase._token),"Prefer":`resolution=${opts?.onConflict?"merge-duplicates":"ignore-duplicates"},return=minimal`},body:JSON.stringify(payload)})
+      .then(r => r.ok ? {error:null} : {error:{message:"Upsert failed"}})
+      .catch(e => ({error:{message:e.message}}));
+    return promise;
+  };
+  return obj;
+};
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const FULL_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
