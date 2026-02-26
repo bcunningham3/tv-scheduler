@@ -1,6 +1,7 @@
 'use client'
 import { useState, useMemo, useEffect, useRef } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+const supabase = createClient("https://fhmdqlustdhiacufqefl.supabase.co", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZobWRxbHVzdGRoaWFjdWZxZWZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxMTQ5MzQsImV4cCI6MjA4NzY5MDkzNH0.am0qht26J8Gp50-2BmlKSdYY0o-BzzDsm4bEYPVXTIc");
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const FULL_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
@@ -169,52 +170,6 @@ function Modal({ show, onClose, children }) {
   );
 }
 
-// Poster uses Anthropic API + web_search to find poster image URLs, caches in localStorage
-async function fetchPosterUrl(title) {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 256,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        messages: [{
-          role: "user",
-          content: `Find the official poster image for TV show "${title}" from TVDB, TMDB, or IMDb. Return ONLY the direct image URL (starting with https://, ending in .jpg .png or .webp). Nothing else.`
-        }]
-      })
-    });
-    const data = await res.json();
-    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
-    const match = text.match(/https?:\/\/[^\s"'<>]+\.(?:jpg|jpeg|png|webp)/i);
-    return match ? match[0] : null;
-  } catch { return null; }
-}
-
-function Poster({ show, size=80 }) {
-  const cacheKey = `tvq-poster-${show.id}`;
-  const [url, setUrl] = useState(() => { try { const v=localStorage.getItem(cacheKey); return (v&&v.startsWith("http"))?v:null; } catch { return null; } });
-  const [tried, setTried] = useState(false);
-  const color = SC[show.status]||"#6366f1";
-  const gc = GC[show.genre]||color;
-  useEffect(() => {
-    if (url || tried) return;
-    setTried(true);
-    fetchPosterUrl(show.title).then(p => {
-      if (p) { setUrl(p); try { localStorage.setItem(cacheKey, p); } catch {} }
-    });
-  }, [show.id, show.title]);
-  if (url) return <img src={url} alt={show.title} onError={()=>setUrl(null)}
-    style={{ width:size,height:size*1.5,objectFit:"cover",borderRadius:"8px",flexShrink:0,display:"block" }}/>;
-  const initials = show.title.split(" ").slice(0,2).map(w=>w[0]?.toUpperCase()||"").join("");
-  return (
-    <div style={{ width:size,height:size*1.5,borderRadius:"8px",flexShrink:0,background:`linear-gradient(135deg,${gc}33,${gc}11)`,
-      border:`1px solid ${gc}33`,display:"flex",alignItems:"center",justifyContent:"center" }}>
-      <span style={{ fontFamily:pf,fontSize:size*0.3,fontWeight:700,color:gc,opacity:0.8 }}>{initials}</span>
-    </div>
-  );
-}
 
 function SeasonDoneModal({ show, onNext, onComplete, onDismiss }) {
   const st = showStats(show);
@@ -237,7 +192,7 @@ function SeasonDoneModal({ show, onNext, onComplete, onDismiss }) {
 }
 
 const DSEASON = { totalEpisodes:"", episodesOut:"", episodeLength:"" };
-const DFORM = { title:"", genre:"", service:"", status:"Watching", multiSeason:false,
+const DFORM = { title:"", emoji:"", genre:"", service:"", status:"Watching", multiSeason:false,
   totalEpisodes:"", episodesOut:"", episodesWatched:"", episodeLength:"",
   seasons:[{...DSEASON}], currentSeason:1, episodesWatchedInSeason:"", airDays:[], watchDays:[], notes:"", rating:0 };
 
@@ -471,60 +426,80 @@ export default function App() {
     return [...base].sort((a,b)=>(a.sortOrder??9999)-(b.sortOrder??9999));
   },[shows,filter]);
 
+  // ── Login screen ──
+  if (!session) return (
+    <div style={{ minHeight:"100vh",background:"#050508",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px",position:"relative",overflow:"hidden" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@300;400;500&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0}input{outline:none}button{cursor:pointer;border:none}
+        .login-input:focus{border-color:#6366f1!important;box-shadow:0 0 0 3px rgba(99,102,241,0.15)!important}
+        @keyframes floatup{0%{opacity:0;transform:translateY(20px)}100%{opacity:1;transform:translateY(0)}}
+        .login-card{animation:floatup .5s ease forwards}
+      `}</style>
+      <div style={{ position:"absolute",top:"-20%",left:"50%",transform:"translateX(-50%)",width:"600px",height:"600px",background:"radial-gradient(ellipse,rgba(99,102,241,0.12) 0%,transparent 70%)",pointerEvents:"none" }}/>
+      <div style={{ position:"absolute",bottom:"-10%",right:"-10%",width:"400px",height:"400px",background:"radial-gradient(ellipse,rgba(168,85,247,0.08) 0%,transparent 70%)",pointerEvents:"none" }}/>
+      <div className="login-card" style={{ width:"100%",maxWidth:"420px",position:"relative",zIndex:1 }}>
+        <div style={{ textAlign:"center",marginBottom:"44px" }}>
+          <div style={{ display:"inline-flex",alignItems:"center",gap:"10px",marginBottom:"12px" }}>
+            <div style={{ width:"42px",height:"42px",borderRadius:"12px",background:"linear-gradient(135deg,#6366f1,#a855f7)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 8px 24px rgba(99,102,241,0.4)" }}>
+              <span style={{ fontSize:"20px" }}>▶</span>
+            </div>
+            <h1 style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"38px",fontWeight:700,letterSpacing:"-1.5px",background:"linear-gradient(135deg,#c7d2fe,#e879f9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>NextUp</h1>
+          </div>
+          <p style={{ fontFamily:"'DM Sans',sans-serif",fontSize:"14px",color:"#4a4a6a" }}>Track what to watch, when to watch it.</p>
+        </div>
+        <div style={{ background:"rgba(15,15,24,0.95)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"24px",padding:"36px 32px",boxShadow:"0 32px 80px rgba(0,0,0,0.7),0 0 0 1px rgba(99,102,241,0.08)",backdropFilter:"blur(20px)" }}>
+          <div style={{ display:"flex",gap:"6px",marginBottom:"24px",background:"#0a0a12",borderRadius:"12px",padding:"4px" }}>
+            {[["login","Sign in"],["signup","Create account"]].map(([m,l])=>(
+              <button key={m} onClick={()=>{setAuthMode(m);setAuthMsg("");}}
+                style={{ flex:1,padding:"8px",borderRadius:"9px",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:500,transition:"all .15s",
+                  background:authMode===m?"linear-gradient(135deg,#6366f1,#a855f7)":"transparent",
+                  color:authMode===m?"#fff":"#5a5a8a",boxShadow:authMode===m?"0 2px 8px rgba(99,102,241,0.3)":"none" }}>{l}</button>
+            ))}
+          </div>
+          <div style={{ display:"flex",flexDirection:"column",gap:"14px" }}>
+            <div>
+              <label style={{ display:"block",fontFamily:"'DM Sans',sans-serif",fontSize:"11px",color:"#5a5a8a",fontWeight:500,letterSpacing:"0.7px",textTransform:"uppercase",marginBottom:"8px" }}>Email</label>
+              <input className="login-input" type="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&(authMode==="login"?signIn():signUp())}
+                placeholder="you@example.com"
+                style={{ width:"100%",background:"#0a0a12",border:"1px solid #1e1e30",borderRadius:"12px",color:"#e0e0f0",padding:"13px 16px",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",transition:"border-color .2s,box-shadow .2s" }}/>
+            </div>
+            <div>
+              <label style={{ display:"block",fontFamily:"'DM Sans',sans-serif",fontSize:"11px",color:"#5a5a8a",fontWeight:500,letterSpacing:"0.7px",textTransform:"uppercase",marginBottom:"8px" }}>Password</label>
+              <input className="login-input" type="password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&(authMode==="login"?signIn():signUp())}
+                placeholder="••••••••"
+                style={{ width:"100%",background:"#0a0a12",border:"1px solid #1e1e30",borderRadius:"12px",color:"#e0e0f0",padding:"13px 16px",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",transition:"border-color .2s,box-shadow .2s" }}/>
+            </div>
+            {authMsg&&(
+              <div style={{ display:"flex",alignItems:"center",gap:"8px",padding:"10px 14px",borderRadius:"10px",background:authMsg.includes("Check")||authMsg.includes("created")?"#0c2010":"#1a0c0c",border:`1px solid ${authMsg.includes("Check")||authMsg.includes("created")?"#4ade8030":"#ef444430"}` }}>
+                <p style={{ fontFamily:"'DM Sans',sans-serif",fontSize:"13px",color:authMsg.includes("Check")||authMsg.includes("created")?"#4ade80":"#f87171" }}>{authMsg}</p>
+              </div>
+            )}
+            <button disabled={authBusy||!authEmail||!authPassword}
+              onClick={()=>authMode==="login"?signIn():signUp()}
+              style={{ width:"100%",background:authBusy?"#1a1a2a":"linear-gradient(135deg,#6366f1,#a855f7)",color:"#fff",padding:"14px",borderRadius:"12px",fontFamily:"'Space Grotesk',sans-serif",fontSize:"15px",fontWeight:600,letterSpacing:"-0.2px",opacity:authBusy?.5:1,boxShadow:authBusy?"none":"0 8px 24px rgba(99,102,241,0.35)",marginTop:"4px",transition:"opacity .2s" }}>
+              {authBusy?"Working…":authMode==="login"?"Sign in →":"Create account →"}
+            </button>
+            <div style={{ borderTop:"1px solid #1a1a28",paddingTop:"14px",textAlign:"center" }}>
+              <button onClick={()=>setAuthMode(authMode==="login"?"signup":"login")}
+                style={{ background:"none",color:"#3a3a5a",fontFamily:"'DM Sans',sans-serif",fontSize:"12px",padding:"4px" }}>
+                {authMode==="login"?"Don't have an account? Sign up":"Already have an account? Sign in"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ minHeight:"100vh",background:"#07070d",color:"#e2e2ef" }}>
-      {/* ── Auth (basic UI, polish later) ── */}
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "14px 16px" }}>
-        {!session ? (
-          <div style={{ border: "1px solid rgba(255,255,255,0.10)", borderRadius: 14, padding: 14, background: "rgba(255,255,255,0.03)" }}>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-              <button onClick={() => setAuthMode("signup")} style={{ opacity: authMode==="signup" ? 1 : 0.6 }}>Create account</button>
-              <button onClick={() => setAuthMode("login")} style={{ opacity: authMode==="login" ? 1 : 0.6 }}>Log in</button>
-              <button onClick={() => setAuthMode("magic")} style={{ opacity: authMode==="magic" ? 1 : 0.6 }}>Email link</button>
-            </div>
-
-            <input
-              value={authEmail}
-              onChange={(e) => setAuthEmail(e.target.value)}
-              placeholder="Email"
-              style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "#e2e2ef", marginBottom: 8 }}
-            />
-
-            {authMode !== "magic" && (
-              <input
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                placeholder="Password"
-                type="password"
-                style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "#e2e2ef", marginBottom: 10 }}
-              />
-            )}
-
-            <button
-              disabled={authBusy || !authEmail || (authMode !== "magic" && !authPassword)}
-              onClick={() => {
-                if (authMode === "signup") return signUp();
-                if (authMode === "login") return signIn();
-                return magicLink();
-              }}
-              style={{ width: "100%" }}
-            >
-              {authBusy ? "Working..." : authMode === "signup" ? "Create account" : authMode === "login" ? "Log in" : "Send login link"}
-            </button>
-
-            {authMsg && <div style={{ marginTop: 10, opacity: 0.85 }}>{authMsg}</div>}
-          </div>
-        ) : (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, paddingBottom: 8 }}>
-            <div style={{ opacity: 0.9 }}>Signed in as <b>{session.user.email}</b>{cloudHydrated ? "" : " (syncing...)"}</div>
-            <button onClick={signOut}>Sign out</button>
-          </div>
-        )}
-      </div>
 
 
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#0f0f14}::-webkit-scrollbar-thumb{background:#2a2a3a;border-radius:3px}
         input,select,textarea{outline:none}button{cursor:pointer;border:none}
@@ -540,15 +515,21 @@ export default function App() {
       {seasonDoneShow && <SeasonDoneModal show={seasonDoneShow} onNext={handleSeasonNext} onComplete={handleSeasonComplete} onDismiss={()=>setSeasonDoneShow(null)}/>}
 
       {/* HEADER */}
-      <div style={{ background:"linear-gradient(180deg,#0f0f18,#07070d)",borderBottom:"1px solid #1a1a28",padding:"16px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px",flexWrap:"wrap" }}>
-        <div>
-          <h1 style={{ fontFamily:pf,fontSize:"24px",fontWeight:900,color:"#fff",lineHeight:1 }}>📺 Watch Queue</h1>
-          <p style={{ color:"#5a5a7a",fontSize:"12px",marginTop:"3px",fontFamily:ff }}>{shows.filter(s=>s.status==="Watching").length} active · {(weekMins/60).toFixed(1)} hrs this week</p>
+      <div style={{ background:"linear-gradient(180deg,rgba(15,15,24,0.98),rgba(7,7,13,0.98))",borderBottom:"1px solid rgba(255,255,255,0.05)",padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px",flexWrap:"wrap",position:"sticky",top:0,zIndex:50 }}>
+        <div style={{ display:"flex",alignItems:"center",gap:"10px" }}>
+          <div style={{ width:"32px",height:"32px",borderRadius:"9px",background:"linear-gradient(135deg,#6366f1,#a855f7)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 12px rgba(99,102,241,0.4)",flexShrink:0 }}>
+            <span style={{ fontSize:"15px",lineHeight:1 }}>▶</span>
+          </div>
+          <div>
+            <h1 style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"22px",fontWeight:700,letterSpacing:"-0.8px",lineHeight:1,background:"linear-gradient(135deg,#c7d2fe,#e879f9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>NextUp</h1>
+            <p style={{ color:"#3a3a5a",fontSize:"11px",marginTop:"2px",fontFamily:ff }}>{shows.filter(s=>s.status==="Watching").length} watching · {(weekMins/60).toFixed(1)}h this week</p>
+          </div>
         </div>
-        <div style={{ display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap" }}>
+        <div style={{ display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap" }}>
           <input ref={importRef} type="file" accept=".json" onChange={importData} style={{ display:"none" }}/>
-          <button onClick={()=>{ setSyncPanel(v=>!v); if(!syncPanel)generateExport(); }} style={{ background:syncPanel?"#6366f122":"#1a1a28",color:syncPanel?"#a5b4fc":"#8888aa",border:`1px solid ${syncPanel?"#6366f144":"#2a2a3a"}`,padding:"8px 14px",borderRadius:"10px",fontFamily:ff,fontSize:"13px",fontWeight:500 }}>🔄 Sync</button>
-          <button onClick={openAdd} style={{ background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"9px 18px",borderRadius:"10px",fontFamily:ff,fontWeight:500,fontSize:"14px",boxShadow:"0 4px 20px rgba(99,102,241,.4)",whiteSpace:"nowrap" }}>+ Add Show</button>
+          <button onClick={()=>{ setSyncPanel(v=>!v); if(!syncPanel)generateExport(); }} style={{ background:syncPanel?"rgba(99,102,241,0.15)":"rgba(255,255,255,0.04)",color:syncPanel?"#a5b4fc":"#6a6a8a",border:`1px solid ${syncPanel?"rgba(99,102,241,0.3)":"rgba(255,255,255,0.07)"}`,padding:"8px 13px",borderRadius:"10px",fontFamily:ff,fontSize:"12px",fontWeight:500 }}>🔄 Sync</button>
+          <button onClick={signOut} style={{ background:"rgba(255,255,255,0.04)",color:"#5a5a7a",border:"1px solid rgba(255,255,255,0.07)",padding:"8px 13px",borderRadius:"10px",fontFamily:ff,fontSize:"12px" }}>Sign out</button>
+          <button onClick={openAdd} style={{ background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"9px 18px",borderRadius:"10px",fontFamily:ff,fontWeight:600,fontSize:"13px",boxShadow:"0 4px 16px rgba(99,102,241,.35)",whiteSpace:"nowrap",letterSpacing:"-0.1px" }}>+ Add Show</button>
         </div>
       </div>
 
@@ -626,7 +607,6 @@ export default function App() {
                   onDragOver={e=>{e.preventDefault();setDragOverId(show.id);}} onDragLeave={()=>setDragOverId(null)}
                   style={{ background:"#0f0f18",border:"1px solid #1e1e2e",borderRadius:"14px",boxShadow:"0 4px 20px rgba(0,0,0,.4)",opacity:isDragging?0.45:1,cursor:"grab",transition:"opacity .15s" }}>
                   <div style={{ display:"flex",gap:"14px",padding:"14px" }}>
-                    <Poster show={show} size={72}/>
                     <div style={{ flex:1,minWidth:0 }}>
                       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"7px" }}>
                         <div style={{ flex:1,paddingRight:"8px" }}>
@@ -635,7 +615,7 @@ export default function App() {
                             {show.genre&&<span style={{ background:(GC[show.genre]||"#6366f1")+"22",color:GC[show.genre]||"#6366f1",fontSize:"10px",padding:"2px 7px",borderRadius:"10px",fontFamily:ff,border:`1px solid ${(GC[show.genre]||"#6366f1")}44` }}>{show.genre}</span>}
                             {isMS&&<span style={{ background:"#ffffff08",color:"#6666aa",fontSize:"10px",padding:"2px 7px",borderRadius:"10px",fontFamily:ff,border:"1px solid #2a2a3a" }}>{st.totalSeasons}S</span>}
                           </div>
-                          <h3 style={{ fontFamily:pf,fontSize:"16px",fontWeight:700,color:"#f0f0ff",lineHeight:1.2 }}>{show.title}</h3>
+                          <h3 style={{ fontFamily:pf,fontSize:"16px",fontWeight:700,color:"#f0f0ff",lineHeight:1.2 }}>{show.emoji&&<span style={{marginRight:"6px"}}>{show.emoji}</span>}{show.title}</h3>
                           {show.service&&<p style={{ color:"#5a5a7a",fontSize:"12px",fontFamily:ff,marginTop:"2px" }}>{show.service}</p>}
                         </div>
                         <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"5px",flexShrink:0 }}>
@@ -770,10 +750,6 @@ export default function App() {
                               border:`1px solid ${isUnreleased?"#fbbf2418":watched?"#4ade8028":isNewAirday?"#fbbf2430":sc2+"20"}`,
                               borderLeft:`3px solid ${isUnreleased?"#fbbf2466":watched?"#4ade80":isNewAirday?"#fbbf24":sc2}`,
                               cursor:isUnreleased?"default":"pointer",opacity:isUnreleased?.7:1 }}>
-                            {/* Mini poster */}
-                            <div style={{ width:"26px",height:"38px",borderRadius:"4px",overflow:"hidden",flexShrink:0 }}>
-                              <Poster show={show} size={26}/>
-                            </div>
                             <div style={{ width:"18px",height:"18px",borderRadius:"5px",flexShrink:0,
                               border:`2px solid ${isUnreleased?"#fbbf2444":watched?"#4ade80":sc2+"55"}`,
                               background:isUnreleased?"transparent":watched?"#4ade8018":"transparent",
@@ -782,7 +758,7 @@ export default function App() {
                               {isUnreleased&&<span style={{ color:"#fbbf24",fontSize:"10px" }}>🔒</span>}
                             </div>
                             <div style={{ flex:1,minWidth:0,opacity:watched?.65:1 }}>
-                              <div style={{ fontFamily:ff,fontSize:"12px",fontWeight:500,color:isUnreleased?"#8888aa":watched?"#4a7a4a":"#e0e0f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{show.title}</div>
+                              <div style={{ fontFamily:ff,fontSize:"12px",fontWeight:500,color:isUnreleased?"#8888aa":watched?"#4a7a4a":"#e0e0f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}</div>
                               <div style={{ display:"flex",gap:"8px",alignItems:"center",marginTop:"2px",flexWrap:"wrap" }}>
                                 <span style={{ fontFamily:ff,fontSize:"10px",color:watched?"#3a5a3a":isUnreleased?"#6a6a4a":"#6888aa" }}>
                                   {isMS2&&<span style={{ color:watched?"#3a5a3a":"#4a4a7a" }}>S{seasonNum} </span>}
@@ -841,10 +817,9 @@ export default function App() {
                 const outPctAll=st.totalEpisodesAll?Math.round(st.episodesOutAll/st.totalEpisodesAll*100):0;
                 return (
                   <div key={show.id} style={{ display:"flex",gap:"12px",alignItems:"center" }}>
-                    <Poster show={show} size={32}/>
                     <div style={{ flex:1 }}>
                       <div style={{ display:"flex",justifyContent:"space-between",marginBottom:"4px" }}>
-                        <span style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.title}{isMS&&<span style={{ color:"#4a4a7a",fontSize:"11px" }}> S{st.currentSeasonNum}/{st.totalSeasons}</span>}</span>
+                        <span style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}{isMS&&<span style={{ color:"#4a4a7a",fontSize:"11px" }}> S{st.currentSeasonNum}/{st.totalSeasons}</span>}</span>
                         <span style={{ fontFamily:ff,fontSize:"12px",color:"#5a5a7a" }}>{st.episodesWatchedAll}/{st.totalEpisodesAll}</span>
                       </div>
                       <div style={{ background:"#1a1a28",borderRadius:"4px",height:"6px",overflow:"hidden",position:"relative" }}>
@@ -868,9 +843,8 @@ export default function App() {
                 return (
                   <div key={show.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 13px",background:"#13131e",borderRadius:"8px" }}>
                     <div style={{ display:"flex",gap:"10px",alignItems:"center" }}>
-                      <Poster show={show} size={28}/>
                       <div>
-                        <div style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.title}</div>
+                        <div style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}</div>
                         <div style={{ fontFamily:ff,fontSize:"11px",color:"#5a5a7a" }}>{rem} ep left{avail>0&&<span style={{ color:"#60a5fa" }}> · {avail} available now</span>}</div>
                       </div>
                     </div>
@@ -887,7 +861,10 @@ export default function App() {
       <Modal show={showModal} onClose={()=>setShowModal(false)}>
         <h2 style={{ fontFamily:pf,fontSize:"20px",fontWeight:700,color:"#f0f0ff",marginBottom:"18px" }}>{editId?"Edit Show":"Add Show"}</h2>
         <div style={{ display:"flex",flexDirection:"column",gap:"14px" }}>
-          <div><label style={LS}>Show Title *</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="e.g. The Bear" style={IS}/></div>
+          <div style={{ display:"grid",gridTemplateColumns:"80px 1fr",gap:"10px",alignItems:"end" }}>
+            <div><label style={LS}>Emoji</label><input value={form.emoji||""} onChange={e=>setForm(f=>({...f,emoji:e.target.value}))} placeholder="🎬" style={{...IS,fontSize:"22px",textAlign:"center",padding:"8px 6px"}}/></div>
+            <div><label style={LS}>Show Title *</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="e.g. The Bear" style={IS}/></div>
+          </div>
           <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px" }}>
             <div><label style={LS}>Genre</label><select value={form.genre} onChange={e=>setForm(f=>({...f,genre:e.target.value}))} style={IS}><option value="">Select...</option>{GENRES.map(g=><option key={g}>{g}</option>)}</select></div>
             <div><label style={LS}>Service</label><select value={form.service} onChange={e=>setForm(f=>({...f,service:e.target.value}))} style={IS}><option value="">Select...</option>{SERVICES.map(s=><option key={s}>{s}</option>)}</select></div>
