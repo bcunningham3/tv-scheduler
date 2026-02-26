@@ -1,6 +1,4 @@
-'use client'
 import { useState, useMemo, useEffect, useRef } from "react";
-import { supabase } from "../../lib/supabaseClient";
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const FULL_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
@@ -14,12 +12,12 @@ const LS = { display:"block",color:"#8888aa",fontSize:"11px",fontFamily:ff,fontW
 const IS = { width:"100%",background:"#13131e",border:"1px solid #2a2a3a",borderRadius:"8px",color:"#e0e0f0",padding:"9px 12px",fontSize:"13px",fontFamily:ff };
 
 const DEFAULT_SHOWS = [
-  { id:1, title:"The Last of Us", genre:"Drama", service:"HBO Max", status:"Watching", multiSeason:true,
+  { id:1, title:"The Last of Us", emoji:"🍄", genre:"Drama", service:"HBO Max", status:"Watching", multiSeason:true,
     seasons:[{totalEpisodes:9,episodesOut:7,episodeLength:60},{totalEpisodes:7,episodesOut:0,episodeLength:60}],
     currentSeason:1, episodesWatchedInSeason:5, airDays:["Sun"], watchDays:["Mon","Tue"], notes:"Amazing show", rating:5, sortOrder:0 },
-  { id:2, title:"Silo", genre:"Sci-Fi", service:"Apple TV+", status:"Watching", multiSeason:false,
+  { id:2, title:"Silo", emoji:"🏚️", genre:"Sci-Fi", service:"Apple TV+", status:"Watching", multiSeason:false,
     totalEpisodes:10, episodesOut:6, episodesWatched:3, episodeLength:50, airDays:["Fri"], watchDays:[], notes:"", rating:4, sortOrder:1 },
-  { id:3, title:"The Wire", genre:"Drama", service:"HBO Max", status:"Upcoming", multiSeason:true,
+  { id:3, title:"The Wire", emoji:"🔫", genre:"Drama", service:"HBO Max", status:"Upcoming", multiSeason:true,
     seasons:[{totalEpisodes:13,episodesOut:13,episodeLength:58},{totalEpisodes:12,episodesOut:12,episodeLength:58},{totalEpisodes:12,episodesOut:12,episodeLength:58},{totalEpisodes:13,episodesOut:13,episodeLength:58},{totalEpisodes:10,episodesOut:10,episodeLength:58}],
     currentSeason:1, episodesWatchedInSeason:0, airDays:[], watchDays:[], notes:"Been meaning to watch forever", rating:0, sortOrder:2 },
 ];
@@ -169,52 +167,6 @@ function Modal({ show, onClose, children }) {
   );
 }
 
-// Poster uses Anthropic API + web_search to find poster image URLs, caches in localStorage
-async function fetchPosterUrl(title) {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 256,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        messages: [{
-          role: "user",
-          content: `Find the official poster image for TV show "${title}" from TVDB, TMDB, or IMDb. Return ONLY the direct image URL (starting with https://, ending in .jpg .png or .webp). Nothing else.`
-        }]
-      })
-    });
-    const data = await res.json();
-    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
-    const match = text.match(/https?:\/\/[^\s"'<>]+\.(?:jpg|jpeg|png|webp)/i);
-    return match ? match[0] : null;
-  } catch { return null; }
-}
-
-function Poster({ show, size=80 }) {
-  const cacheKey = `tvq-poster-${show.id}`;
-  const [url, setUrl] = useState(() => { try { const v=localStorage.getItem(cacheKey); return (v&&v.startsWith("http"))?v:null; } catch { return null; } });
-  const [tried, setTried] = useState(false);
-  const color = SC[show.status]||"#6366f1";
-  const gc = GC[show.genre]||color;
-  useEffect(() => {
-    if (url || tried) return;
-    setTried(true);
-    fetchPosterUrl(show.title).then(p => {
-      if (p) { setUrl(p); try { localStorage.setItem(cacheKey, p); } catch {} }
-    });
-  }, [show.id, show.title]);
-  if (url) return <img src={url} alt={show.title} onError={()=>setUrl(null)}
-    style={{ width:size,height:size*1.5,objectFit:"cover",borderRadius:"8px",flexShrink:0,display:"block" }}/>;
-  const initials = show.title.split(" ").slice(0,2).map(w=>w[0]?.toUpperCase()||"").join("");
-  return (
-    <div style={{ width:size,height:size*1.5,borderRadius:"8px",flexShrink:0,background:`linear-gradient(135deg,${gc}33,${gc}11)`,
-      border:`1px solid ${gc}33`,display:"flex",alignItems:"center",justifyContent:"center" }}>
-      <span style={{ fontFamily:pf,fontSize:size*0.3,fontWeight:700,color:gc,opacity:0.8 }}>{initials}</span>
-    </div>
-  );
-}
 
 function SeasonDoneModal({ show, onNext, onComplete, onDismiss }) {
   const st = showStats(show);
@@ -237,7 +189,7 @@ function SeasonDoneModal({ show, onNext, onComplete, onDismiss }) {
 }
 
 const DSEASON = { totalEpisodes:"", episodesOut:"", episodeLength:"" };
-const DFORM = { title:"", genre:"", service:"", status:"Watching", multiSeason:false,
+const DFORM = { title:"", emoji:"", genre:"", service:"", status:"Watching", multiSeason:false,
   totalEpisodes:"", episodesOut:"", episodesWatched:"", episodeLength:"",
   seasons:[{...DSEASON}], currentSeason:1, episodesWatchedInSeason:"", airDays:[], watchDays:[], notes:"", rating:0 };
 
@@ -247,82 +199,16 @@ export default function App() {
   const [watchedEps, setWatchedEps] = useState(() => { try{const w=localStorage.getItem("tvq-watched");if(w)return JSON.parse(w);}catch{}return {}; });
   const [session, setSession] = useState(null);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [authMsg, setAuthMsg] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   const [cloudReady, setCloudReady] = useState(false);
+  const [showLogin, setShowLogin] = useState(true);
 
   useEffect(()=>{ try{localStorage.setItem("tvq-shows",JSON.stringify(shows));}catch{} },[shows]);
   useEffect(()=>{ try{localStorage.setItem("tvq-prefs",JSON.stringify(prefs));}catch{} },[prefs]);
   useEffect(()=>{ try{localStorage.setItem("tvq-watched",JSON.stringify(watchedEps));}catch{} },[watchedEps]);
-  // ---- Supabase auth + cloud sync ----
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-    });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      setCloudReady(false);
-      setAuthMsg("");
-    });
-
-    return () => sub.subscription.unsubscribe();
-  }, []);
-
-  // Load saved state from Supabase once the user is signed in
-  useEffect(() => {
-    if (!session?.user?.id) return;
-
-    (async () => {
-      const { data, error } = await supabase
-        .from("tvq_state")
-        .select("shows,prefs,watched")
-        .eq("user_id", session.user.id)
-        .single();
-
-      // No row yet is fine (first-time user)
-      if (error && error.code !== "PGRST116") {
-        console.error("Supabase load error:", error);
-        setCloudReady(true);
-        return;
-      }
-
-      if (data?.shows) setShows(data.shows);
-      if (data?.prefs) setPrefs(data.prefs);
-      if (data?.watched) setWatchedEps(data.watched);
-
-      setCloudReady(true);
-    })();
-  }, [session?.user?.id]);
-
   const saveTimer = useRef(null);
-
-  // Auto-save to Supabase when state changes (debounced)
-  useEffect(() => {
-    if (!session?.user?.id) return;
-    if (!cloudReady) return;
-
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-
-    saveTimer.current = setTimeout(async () => {
-      const payload = {
-        user_id: session.user.id,
-        shows,
-        prefs,
-        watched: watchedEps,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error } = await supabase
-        .from("tvq_state")
-        .upsert(payload, { onConflict: "user_id" });
-
-      if (error) console.error("Supabase save error:", error);
-    }, 500);
-
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
-  }, [shows, prefs, watchedEps, session?.user?.id, cloudReady]);
 
 
   const [form, setForm] = useState(DFORM);
@@ -440,10 +326,90 @@ export default function App() {
     return [...base].sort((a,b)=>(a.sortOrder??9999)-(b.sortOrder??9999));
   },[shows,filter]);
 
+
+  // ── Login screen ──
+  if (!session && showLogin) return (
+    <div style={{ minHeight:"100vh",background:"#050508",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px",position:"relative",overflow:"hidden" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@300;400;500&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0}input{outline:none}button{cursor:pointer;border:none}
+        .login-input:focus{border-color:#6366f1!important;box-shadow:0 0 0 3px rgba(99,102,241,0.15)!important}
+        @keyframes floatup{0%{opacity:0;transform:translateY(20px)}100%{opacity:1;transform:translateY(0)}}
+        .login-card{animation:floatup .5s ease forwards}
+      `}</style>
+      {/* Background glow orbs */}
+      <div style={{ position:"absolute",top:"-20%",left:"50%",transform:"translateX(-50%)",width:"600px",height:"600px",background:"radial-gradient(ellipse,rgba(99,102,241,0.12) 0%,transparent 70%)",pointerEvents:"none" }}/>
+      <div style={{ position:"absolute",bottom:"-10%",right:"-10%",width:"400px",height:"400px",background:"radial-gradient(ellipse,rgba(168,85,247,0.08) 0%,transparent 70%)",pointerEvents:"none" }}/>
+      <div className="login-card" style={{ width:"100%",maxWidth:"420px",position:"relative",zIndex:1 }}>
+        {/* Logo */}
+        <div style={{ textAlign:"center",marginBottom:"44px" }}>
+          <div style={{ display:"inline-flex",alignItems:"center",gap:"10px",marginBottom:"12px" }}>
+            <div style={{ width:"42px",height:"42px",borderRadius:"12px",background:"linear-gradient(135deg,#6366f1,#a855f7)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 8px 24px rgba(99,102,241,0.4)" }}>
+              <span style={{ fontSize:"20px" }}>▶</span>
+            </div>
+            <h1 style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"38px",fontWeight:700,letterSpacing:"-1.5px",background:"linear-gradient(135deg,#c7d2fe,#e879f9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>NextUp</h1>
+          </div>
+          <p style={{ fontFamily:"'DM Sans',sans-serif",fontSize:"14px",color:"#4a4a6a",letterSpacing:"0.2px" }}>Track what to watch, when to watch it.</p>
+        </div>
+        {/* Card */}
+        <div style={{ background:"rgba(15,15,24,0.95)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"24px",padding:"36px 32px",boxShadow:"0 32px 80px rgba(0,0,0,0.7),0 0 0 1px rgba(99,102,241,0.08)",backdropFilter:"blur(20px)" }}>
+          <p style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"18px",fontWeight:600,color:"#e0e0ff",marginBottom:"28px",letterSpacing:"-0.3px" }}>Welcome back</p>
+          <div style={{ display:"flex",flexDirection:"column",gap:"16px" }}>
+            <div>
+              <label style={{ display:"block",fontFamily:"'DM Sans',sans-serif",fontSize:"11px",color:"#5a5a8a",fontWeight:500,letterSpacing:"0.7px",textTransform:"uppercase",marginBottom:"8px" }}>Email</label>
+              <input className="login-input" type="email" value={email} onChange={e=>setEmail(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&document.getElementById("nextup-signin-btn").click()}
+                placeholder="you@example.com"
+                style={{ width:"100%",background:"#0a0a12",border:"1px solid #1e1e30",borderRadius:"12px",color:"#e0e0f0",padding:"13px 16px",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",transition:"border-color .2s,box-shadow .2s" }}/>
+            </div>
+            <div>
+              <label style={{ display:"block",fontFamily:"'DM Sans',sans-serif",fontSize:"11px",color:"#5a5a8a",fontWeight:500,letterSpacing:"0.7px",textTransform:"uppercase",marginBottom:"8px" }}>Password</label>
+              <input className="login-input" type="password" value={password} onChange={e=>setPassword(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&document.getElementById("nextup-signin-btn").click()}
+                placeholder="••••••••"
+                style={{ width:"100%",background:"#0a0a12",border:"1px solid #1e1e30",borderRadius:"12px",color:"#e0e0f0",padding:"13px 16px",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",transition:"border-color .2s,box-shadow .2s" }}/>
+            </div>
+            {authMsg&&(
+              <div style={{ display:"flex",alignItems:"center",gap:"8px",padding:"10px 14px",borderRadius:"10px",background:authMsg.startsWith("✓")?"#0c2010":"#1a0c0c",border:`1px solid ${authMsg.startsWith("✓")?"#4ade8030":"#ef444430"}` }}>
+                <span style={{ fontSize:"14px" }}>{authMsg.startsWith("✓")?"✓":"⚠"}</span>
+                <p style={{ fontFamily:"'DM Sans',sans-serif",fontSize:"13px",color:authMsg.startsWith("✓")?"#4ade80":"#f87171" }}>{authMsg}</p>
+              </div>
+            )}
+            <button id="nextup-signin-btn"
+              disabled={authLoading}
+              onClick={async()=>{
+                if(!email||!password){setAuthMsg("Please enter your email and password.");return;}
+                setAuthLoading(true); setAuthMsg("");
+                try {
+                  const res = await fetch("https://fhmdqlustdhiacufqefl.supabase.co/auth/v1/token?grant_type=password", {
+                    method:"POST", headers:{"Content-Type":"application/json","apikey":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZobWRxbHVzdGRoaWFjdWZxZWZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxMTQ5MzQsImV4cCI6MjA4NzY5MDkzNH0.am0qht26J8Gp50-2BmlKSdYY0o-BzzDsm4bEYPVXTIc"},
+                    body: JSON.stringify({email, password})
+                  });
+                  const data = await res.json();
+                  if (data.access_token) { setSession(data); setShowLogin(false); setAuthMsg(""); }
+                  else setAuthMsg(data.error_description || data.msg || "Incorrect email or password.");
+                } catch { setAuthMsg("Network error. Please try again."); }
+                setAuthLoading(false);
+              }}
+              style={{ width:"100%",background:authLoading?"#1a1a2a":"linear-gradient(135deg,#6366f1,#a855f7)",color:"#fff",padding:"14px",borderRadius:"12px",fontFamily:"'Space Grotesk',sans-serif",fontSize:"15px",fontWeight:600,letterSpacing:"-0.2px",transition:"opacity .2s,transform .1s",opacity:authLoading?0.5:1,boxShadow:authLoading?"none":"0 8px 24px rgba(99,102,241,0.35)",marginTop:"4px" }}>
+              {authLoading?"Signing in…":"Sign in →"}
+            </button>
+            <div style={{ borderTop:"1px solid #1a1a28",paddingTop:"16px",textAlign:"center" }}>
+              <button onClick={()=>setShowLogin(false)}
+                style={{ background:"none",color:"#3a3a5a",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",padding:"4px 8px" }}>
+                Continue without signing in
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ minHeight:"100vh",background:"#07070d",color:"#e2e2ef" }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#0f0f14}::-webkit-scrollbar-thumb{background:#2a2a3a;border-radius:3px}
         input,select,textarea{outline:none}button{cursor:pointer;border:none}
@@ -456,53 +422,25 @@ export default function App() {
         .drag-over{outline:2px solid #6366f188;outline-offset:3px;border-radius:14px}
       `}</style>
 
-      {/* --- Cloud Sync Login --- */}
-      {!session && (
-        <div style={{ padding: 12, border: "1px solid #2a2a3a", borderRadius: 12, marginBottom: 12 }}>
-          <div style={{ marginBottom: 8 }}>Sign in to sync your TV Queue across devices</div>
-          <input
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #2a2a3a", width: "100%", marginBottom: 8, background: "transparent", color: "inherit" }}
-            placeholder="your@email.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-          <button
-            className="btn"
-            onClick={async () => {
-              setAuthMsg("");
-              const { error } = await supabase.auth.signInWithOtp({ email });
-              setAuthMsg(error ? error.message : "Check your email for the login link.");
-            }}
-          >
-            Email me a login link
-          </button>
-          {authMsg && <div style={{ marginTop: 8, opacity: 0.85 }}>{authMsg}</div>}
-          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
-            Tip: once you’re signed in, your shows/prefs/watch history auto-save.
-          </div>
-        </div>
-      )}
-
-      {session && (
-        <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ opacity: 0.8 }}>Signed in as {session.user.email}</div>
-          <button className="btn" onClick={() => supabase.auth.signOut()}>Sign out</button>
-        </div>
-      )}
-
 
       {seasonDoneShow && <SeasonDoneModal show={seasonDoneShow} onNext={handleSeasonNext} onComplete={handleSeasonComplete} onDismiss={()=>setSeasonDoneShow(null)}/>}
 
       {/* HEADER */}
-      <div style={{ background:"linear-gradient(180deg,#0f0f18,#07070d)",borderBottom:"1px solid #1a1a28",padding:"16px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px",flexWrap:"wrap" }}>
-        <div>
-          <h1 style={{ fontFamily:pf,fontSize:"24px",fontWeight:900,color:"#fff",lineHeight:1 }}>📺 Watch Queue</h1>
-          <p style={{ color:"#5a5a7a",fontSize:"12px",marginTop:"3px",fontFamily:ff }}>{shows.filter(s=>s.status==="Watching").length} active · {(weekMins/60).toFixed(1)} hrs this week</p>
+      <div style={{ background:"linear-gradient(180deg,rgba(15,15,24,0.98),rgba(7,7,13,0.98))",borderBottom:"1px solid rgba(255,255,255,0.05)",padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px",flexWrap:"wrap",backdropFilter:"blur(12px)",position:"sticky",top:0,zIndex:50 }}>
+        <div style={{ display:"flex",alignItems:"center",gap:"10px" }}>
+          <div style={{ width:"32px",height:"32px",borderRadius:"9px",background:"linear-gradient(135deg,#6366f1,#a855f7)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 12px rgba(99,102,241,0.4)",flexShrink:0 }}>
+            <span style={{ fontSize:"15px",lineHeight:1 }}>▶</span>
+          </div>
+          <div>
+            <h1 style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"22px",fontWeight:700,letterSpacing:"-0.8px",lineHeight:1,background:"linear-gradient(135deg,#c7d2fe,#e879f9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>NextUp</h1>
+            <p style={{ color:"#3a3a5a",fontSize:"11px",marginTop:"2px",fontFamily:ff,letterSpacing:"0.1px" }}>{shows.filter(s=>s.status==="Watching").length} watching · {(weekMins/60).toFixed(1)}h this week</p>
+          </div>
         </div>
-        <div style={{ display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap" }}>
+        <div style={{ display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap" }}>
           <input ref={importRef} type="file" accept=".json" onChange={importData} style={{ display:"none" }}/>
-          <button onClick={()=>{ setSyncPanel(v=>!v); if(!syncPanel)generateExport(); }} style={{ background:syncPanel?"#6366f122":"#1a1a28",color:syncPanel?"#a5b4fc":"#8888aa",border:`1px solid ${syncPanel?"#6366f144":"#2a2a3a"}`,padding:"8px 14px",borderRadius:"10px",fontFamily:ff,fontSize:"13px",fontWeight:500 }}>🔄 Sync</button>
-          <button onClick={openAdd} style={{ background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"9px 18px",borderRadius:"10px",fontFamily:ff,fontWeight:500,fontSize:"14px",boxShadow:"0 4px 20px rgba(99,102,241,.4)",whiteSpace:"nowrap" }}>+ Add Show</button>
+          <button onClick={()=>{ setSyncPanel(v=>!v); if(!syncPanel)generateExport(); }} style={{ background:syncPanel?"rgba(99,102,241,0.15)":"rgba(255,255,255,0.04)",color:syncPanel?"#a5b4fc":"#6a6a8a",border:`1px solid ${syncPanel?"rgba(99,102,241,0.3)":"rgba(255,255,255,0.07)"}`,padding:"8px 13px",borderRadius:"10px",fontFamily:ff,fontSize:"12px",fontWeight:500,transition:"all .15s" }}>🔄 Sync</button>
+          {session&&<button onClick={()=>{setSession(null);setShowLogin(true);}} style={{ background:"rgba(255,255,255,0.04)",color:"#5a5a7a",border:"1px solid rgba(255,255,255,0.07)",padding:"8px 13px",borderRadius:"10px",fontFamily:ff,fontSize:"12px",transition:"all .15s" }}>Sign out</button>}
+          <button onClick={openAdd} style={{ background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"9px 18px",borderRadius:"10px",fontFamily:ff,fontWeight:600,fontSize:"13px",boxShadow:"0 4px 16px rgba(99,102,241,.35)",whiteSpace:"nowrap",letterSpacing:"-0.1px" }}>+ Add Show</button>
         </div>
       </div>
 
@@ -580,7 +518,6 @@ export default function App() {
                   onDragOver={e=>{e.preventDefault();setDragOverId(show.id);}} onDragLeave={()=>setDragOverId(null)}
                   style={{ background:"#0f0f18",border:"1px solid #1e1e2e",borderRadius:"14px",boxShadow:"0 4px 20px rgba(0,0,0,.4)",opacity:isDragging?0.45:1,cursor:"grab",transition:"opacity .15s" }}>
                   <div style={{ display:"flex",gap:"14px",padding:"14px" }}>
-                    <Poster show={show} size={72}/>
                     <div style={{ flex:1,minWidth:0 }}>
                       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"7px" }}>
                         <div style={{ flex:1,paddingRight:"8px" }}>
@@ -589,7 +526,7 @@ export default function App() {
                             {show.genre&&<span style={{ background:(GC[show.genre]||"#6366f1")+"22",color:GC[show.genre]||"#6366f1",fontSize:"10px",padding:"2px 7px",borderRadius:"10px",fontFamily:ff,border:`1px solid ${(GC[show.genre]||"#6366f1")}44` }}>{show.genre}</span>}
                             {isMS&&<span style={{ background:"#ffffff08",color:"#6666aa",fontSize:"10px",padding:"2px 7px",borderRadius:"10px",fontFamily:ff,border:"1px solid #2a2a3a" }}>{st.totalSeasons}S</span>}
                           </div>
-                          <h3 style={{ fontFamily:pf,fontSize:"16px",fontWeight:700,color:"#f0f0ff",lineHeight:1.2 }}>{show.title}</h3>
+                          <h3 style={{ fontFamily:pf,fontSize:"16px",fontWeight:700,color:"#f0f0ff",lineHeight:1.2 }}>{show.emoji&&<span style={{marginRight:"6px"}}>{show.emoji}</span>}{show.title}</h3>
                           {show.service&&<p style={{ color:"#5a5a7a",fontSize:"12px",fontFamily:ff,marginTop:"2px" }}>{show.service}</p>}
                         </div>
                         <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"5px",flexShrink:0 }}>
@@ -724,10 +661,7 @@ export default function App() {
                               border:`1px solid ${isUnreleased?"#fbbf2418":watched?"#4ade8028":isNewAirday?"#fbbf2430":sc2+"20"}`,
                               borderLeft:`3px solid ${isUnreleased?"#fbbf2466":watched?"#4ade80":isNewAirday?"#fbbf24":sc2}`,
                               cursor:isUnreleased?"default":"pointer",opacity:isUnreleased?.7:1 }}>
-                            {/* Mini poster */}
-                            <div style={{ width:"26px",height:"38px",borderRadius:"4px",overflow:"hidden",flexShrink:0 }}>
-                              <Poster show={show} size={26}/>
-                            </div>
+
                             <div style={{ width:"18px",height:"18px",borderRadius:"5px",flexShrink:0,
                               border:`2px solid ${isUnreleased?"#fbbf2444":watched?"#4ade80":sc2+"55"}`,
                               background:isUnreleased?"transparent":watched?"#4ade8018":"transparent",
@@ -736,7 +670,7 @@ export default function App() {
                               {isUnreleased&&<span style={{ color:"#fbbf24",fontSize:"10px" }}>🔒</span>}
                             </div>
                             <div style={{ flex:1,minWidth:0,opacity:watched?.65:1 }}>
-                              <div style={{ fontFamily:ff,fontSize:"12px",fontWeight:500,color:isUnreleased?"#8888aa":watched?"#4a7a4a":"#e0e0f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{show.title}</div>
+                              <div style={{ fontFamily:ff,fontSize:"12px",fontWeight:500,color:isUnreleased?"#8888aa":watched?"#4a7a4a":"#e0e0f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}</div>
                               <div style={{ display:"flex",gap:"8px",alignItems:"center",marginTop:"2px",flexWrap:"wrap" }}>
                                 <span style={{ fontFamily:ff,fontSize:"10px",color:watched?"#3a5a3a":isUnreleased?"#6a6a4a":"#6888aa" }}>
                                   {isMS2&&<span style={{ color:watched?"#3a5a3a":"#4a4a7a" }}>S{seasonNum} </span>}
@@ -795,10 +729,9 @@ export default function App() {
                 const outPctAll=st.totalEpisodesAll?Math.round(st.episodesOutAll/st.totalEpisodesAll*100):0;
                 return (
                   <div key={show.id} style={{ display:"flex",gap:"12px",alignItems:"center" }}>
-                    <Poster show={show} size={32}/>
                     <div style={{ flex:1 }}>
                       <div style={{ display:"flex",justifyContent:"space-between",marginBottom:"4px" }}>
-                        <span style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.title}{isMS&&<span style={{ color:"#4a4a7a",fontSize:"11px" }}> S{st.currentSeasonNum}/{st.totalSeasons}</span>}</span>
+                        <span style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}{isMS&&<span style={{ color:"#4a4a7a",fontSize:"11px" }}> S{st.currentSeasonNum}/{st.totalSeasons}</span>}</span>
                         <span style={{ fontFamily:ff,fontSize:"12px",color:"#5a5a7a" }}>{st.episodesWatchedAll}/{st.totalEpisodesAll}</span>
                       </div>
                       <div style={{ background:"#1a1a28",borderRadius:"4px",height:"6px",overflow:"hidden",position:"relative" }}>
@@ -822,9 +755,8 @@ export default function App() {
                 return (
                   <div key={show.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 13px",background:"#13131e",borderRadius:"8px" }}>
                     <div style={{ display:"flex",gap:"10px",alignItems:"center" }}>
-                      <Poster show={show} size={28}/>
                       <div>
-                        <div style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.title}</div>
+                        <div style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}</div>
                         <div style={{ fontFamily:ff,fontSize:"11px",color:"#5a5a7a" }}>{rem} ep left{avail>0&&<span style={{ color:"#60a5fa" }}> · {avail} available now</span>}</div>
                       </div>
                     </div>
@@ -841,7 +773,10 @@ export default function App() {
       <Modal show={showModal} onClose={()=>setShowModal(false)}>
         <h2 style={{ fontFamily:pf,fontSize:"20px",fontWeight:700,color:"#f0f0ff",marginBottom:"18px" }}>{editId?"Edit Show":"Add Show"}</h2>
         <div style={{ display:"flex",flexDirection:"column",gap:"14px" }}>
-          <div><label style={LS}>Show Title *</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="e.g. The Bear" style={IS}/></div>
+          <div style={{ display:"grid",gridTemplateColumns:"80px 1fr",gap:"10px",alignItems:"end" }}>
+            <div><label style={LS}>Emoji</label><input value={form.emoji||""} onChange={e=>setForm(f=>({...f,emoji:e.target.value}))} placeholder="🎬" style={{...IS,fontSize:"22px",textAlign:"center",padding:"8px 6px"}}/></div>
+            <div><label style={LS}>Show Title *</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="e.g. The Bear" style={IS}/></div>
+          </div>
           <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px" }}>
             <div><label style={LS}>Genre</label><select value={form.genre} onChange={e=>setForm(f=>({...f,genre:e.target.value}))} style={IS}><option value="">Select...</option>{GENRES.map(g=><option key={g}>{g}</option>)}</select></div>
             <div><label style={LS}>Service</label><select value={form.service} onChange={e=>setForm(f=>({...f,service:e.target.value}))} style={IS}><option value="">Select...</option>{SERVICES.map(s=><option key={s}>{s}</option>)}</select></div>
