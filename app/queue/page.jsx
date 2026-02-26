@@ -1,3 +1,5 @@
+'use client'
+
 import { useState, useMemo, useEffect, useRef } from "react";
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
