@@ -1,78 +1,7 @@
 'use client'
-import { useState, useMemo, useEffect, useRef } from "react";
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
-// Lightweight Supabase client (no SDK import needed in artifact)
-const SUPA_URL = "https://fhmdqlustdhiacufqefl.supabase.co";
-const SUPA_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZobWRxbHVzdGRoaWFjdWZxZWZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxMTQ5MzQsImV4cCI6MjA4NzY5MDkzNH0.am0qht26J8Gp50-2BmlKSdYY0o-BzzDsm4bEYPVXTIc";
-function supaHeaders(token) {
-  const h = {"Content-Type":"application/json","apikey":SUPA_KEY,"Authorization":`Bearer ${token||SUPA_KEY}`};
-  return h;
-}
-const supabase = {
-  _token: null,
-  auth: {
-    getSession: async () => {
-      try {
-        const s = localStorage.getItem("supa_session");
-        if (s) { const parsed = JSON.parse(s); supabase._token = parsed.access_token; return {data:{session:parsed}}; }
-      } catch {}
-      return {data:{session:null}};
-    },
-    onAuthStateChange: (cb) => { return {data:{subscription:{unsubscribe:()=>{}}}}; },
-    signInWithPassword: async ({email,password}) => {
-      const r = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=password`,{method:"POST",headers:{"Content-Type":"application/json","apikey":SUPA_KEY},body:JSON.stringify({email,password})});
-      const d = await r.json();
-      if (d.access_token) { supabase._token=d.access_token; try{localStorage.setItem("supa_session",JSON.stringify(d));}catch{} return {data:d,error:null}; }
-      return {data:null,error:{message:d.error_description||d.msg||"Sign in failed"}};
-    },
-    signUp: async ({email,password}) => {
-      const r = await fetch(`${SUPA_URL}/auth/v1/signup`,{method:"POST",headers:{"Content-Type":"application/json","apikey":SUPA_KEY},body:JSON.stringify({email,password})});
-      const d = await r.json();
-      if (d.id||d.email) return {data:d,error:null};
-      return {data:null,error:{message:d.error_description||d.msg||"Sign up failed"}};
-    },
-    signInWithOtp: async ({email}) => {
-      const r = await fetch(`${SUPA_URL}/auth/v1/otp`,{method:"POST",headers:{"Content-Type":"application/json","apikey":SUPA_KEY},body:JSON.stringify({email})});
-      return r.ok ? {data:{},error:null} : {data:null,error:{message:"OTP failed"}};
-    },
-    signOut: async () => { supabase._token=null; try{localStorage.removeItem("supa_session");}catch{} return {error:null}; },
-  },
-  from: (table) => ({
-    select: (cols) => ({
-      eq: (col,val) => ({
-        maybeSingle: async () => {
-          const r = await fetch(`${SUPA_URL}/rest/v1/${table}?select=${cols}&${col}=eq.${val}&limit=1`,{headers:supaHeaders(supabase._token)});
-          const d = await r.json();
-          return Array.isArray(d) ? {data:d[0]||null,error:null} : {data:null,error:d};
-        },
-        single: async () => {
-          const r = await fetch(`${SUPA_URL}/rest/v1/${table}?select=${cols}&${col}=eq.${val}&limit=1`,{headers:supaHeaders(supabase._token)});
-          const d = await r.json();
-          return Array.isArray(d) ? {data:d[0]||null,error:null} : {data:null,error:d};
-        },
-      }),
-    }),
-    upsert: (payload, opts) => ({
-      then: async (resolve) => {
-        const r = await fetch(`${SUPA_URL}/rest/v1/${table}`,{method:"POST",headers:{...supaHeaders(supabase._token),"Prefer":`resolution=${opts?.onConflict?"merge-duplicates":"ignore-duplicates"},return=minimal`},body:JSON.stringify(payload)});
-        resolve(r.ok ? {error:null} : {error:{message:"Upsert failed"}});
-      },
-    }),
-  }),
-};
-// Make upsert awaitable
-const _origFrom = supabase.from.bind(supabase);
-supabase.from = (table) => {
-  const obj = _origFrom(table);
-  obj.upsert = (payload, opts) => {
-    const promise = fetch(`${SUPA_URL}/rest/v1/${table}`,{method:"POST",headers:{...supaHeaders(supabase._token),"Prefer":`resolution=${opts?.onConflict?"merge-duplicates":"ignore-duplicates"},return=minimal`},body:JSON.stringify(payload)})
-      .then(r => r.ok ? {error:null} : {error:{message:"Upsert failed"}})
-      .catch(e => ({error:{message:e.message}}));
-    return promise;
-  };
-  return obj;
-};
+import { useState, useMemo, useEffect, useRef } from "react";
+import { supabase } from "../../lib/supabaseClient";
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const FULL_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
@@ -467,25 +396,6 @@ export default function App() {
     });
   };
 
-  const [syncPanel, setSyncPanel] = useState(false);
-  const [syncData, setSyncData] = useState("");
-  const [syncMsg, setSyncMsg] = useState("");
-  const [syncMode, setSyncMode] = useState("export");
-  const syncDataRef = useRef(null);
-  const importRef = useRef(null);
-
-  const generateExport = ()=>{ setSyncData(JSON.stringify({shows,prefs,watchedEps,version:1})); setSyncMode("export"); setSyncMsg(""); };
-  const loadFromPaste = ()=>{
-    const text=(syncDataRef.current?.value||syncData).trim();
-    if(!text){setSyncMsg("Paste your data first.");return;}
-    try{const d=JSON.parse(text);if(d.shows)setShows(d.shows);if(d.prefs)setPrefs(d.prefs);if(d.watchedEps)setWatchedEps(d.watchedEps);setSyncMsg("✓ Loaded!");setTimeout(()=>setSyncPanel(false),1200);}
-    catch{setSyncMsg("Invalid data.");}
-  };
-  const importData = e=>{
-    const file=e.target.files[0];if(!file)return;
-    const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(d.shows)setShows(d.shows);if(d.prefs)setPrefs(d.prefs);if(d.watchedEps)setWatchedEps(d.watchedEps);alert("✓ Imported!");}catch{alert("Invalid file.");}};
-    r.readAsText(file);e.target.value="";
-  };
 
   const del = id=>setShows(s=>s.filter(x=>x.id!==id));
   const toggleFDay = (day,field)=>setForm(f=>({...f,[field]:f[field].includes(day)?f[field].filter(d=>d!==day):[...f[field],day]}));
@@ -597,47 +507,10 @@ export default function App() {
           </div>
         </div>
         <div style={{ display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap" }}>
-          <input ref={importRef} type="file" accept=".json" onChange={importData} style={{ display:"none" }}/>
-          <button onClick={()=>{ setSyncPanel(v=>!v); if(!syncPanel)generateExport(); }} style={{ background:syncPanel?"rgba(99,102,241,0.15)":"rgba(255,255,255,0.04)",color:syncPanel?"#a5b4fc":"#6a6a8a",border:`1px solid ${syncPanel?"rgba(99,102,241,0.3)":"rgba(255,255,255,0.07)"}`,padding:"8px 13px",borderRadius:"10px",fontFamily:ff,fontSize:"12px",fontWeight:500 }}>🔄 Sync</button>
           <button onClick={signOut} style={{ background:"rgba(255,255,255,0.04)",color:"#5a5a7a",border:"1px solid rgba(255,255,255,0.07)",padding:"8px 13px",borderRadius:"10px",fontFamily:ff,fontSize:"12px" }}>Sign out</button>
           <button onClick={openAdd} style={{ background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"9px 18px",borderRadius:"10px",fontFamily:ff,fontWeight:600,fontSize:"13px",boxShadow:"0 4px 16px rgba(99,102,241,.35)",whiteSpace:"nowrap",letterSpacing:"-0.1px" }}>+ Add Show</button>
         </div>
       </div>
-
-      {/* SYNC PANEL */}
-      {syncPanel && (
-        <div style={{ background:"#0f0f18",borderBottom:"1px solid #2a2a3a",padding:"16px 20px" }}>
-          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"12px" }}>
-            <div><p style={{ fontFamily:pf,fontSize:"15px",fontWeight:700,color:"#f0f0ff",marginBottom:"3px" }}>Sync Between Devices</p><p style={{ fontFamily:ff,fontSize:"12px",color:"#5a5a7a" }}>Export your data as text, copy it, paste it on another device.</p></div>
-            <button onClick={()=>{setSyncPanel(false);setSyncData("");setSyncMsg("");}} style={{ background:"none",color:"#3a3a5a",fontSize:"18px",padding:"0 4px" }}>✕</button>
-          </div>
-          <div style={{ display:"flex",gap:"6px",marginBottom:"12px" }}>
-            {[["export","📤 Export"],["import","📥 Import"]].map(([m,l])=>(
-              <button key={m} onClick={()=>{setSyncMode(m);setSyncMsg("");if(m==="export")generateExport();else setSyncData("");}}
-                style={{ flex:1,background:syncMode===m?"#6366f122":"#13131e",color:syncMode===m?"#a5b4fc":"#5a5a7a",border:`1px solid ${syncMode===m?"#6366f144":"#2a2a3a"}`,padding:"9px",borderRadius:"8px",fontFamily:ff,fontSize:"13px",fontWeight:500 }}>{l}</button>
-            ))}
-          </div>
-          {syncMode==="export"&&syncData&&(
-            <div>
-              <p style={{ fontFamily:ff,fontSize:"12px",color:"#8888aa",marginBottom:"6px" }}>Copy all this text, paste it on your other device using Import:</p>
-              <div style={{ display:"flex",gap:"8px",alignItems:"stretch",marginBottom:"8px" }}>
-                <textarea ref={syncDataRef} readOnly value={syncData} onFocus={e=>e.target.select()} onClick={e=>e.target.select()}
-                  style={{ ...IS,flex:1,fontSize:"11px",fontFamily:"monospace",height:"72px",resize:"none",cursor:"text" }}/>
-                <button onClick={async()=>{ try{await navigator.clipboard.writeText(syncData);setSyncMsg("✓ Copied!");}catch{if(syncDataRef.current){syncDataRef.current.focus();syncDataRef.current.select();}setSyncMsg("Press Ctrl+C / Cmd+C to copy");} }}
-                  style={{ background:"#6366f1",color:"#fff",padding:"0 16px",borderRadius:"8px",fontFamily:ff,fontSize:"13px",fontWeight:500,whiteSpace:"nowrap",flexShrink:0 }}>📋 Copy</button>
-              </div>
-            </div>
-          )}
-          {syncMode==="import"&&(
-            <div>
-              <p style={{ fontFamily:ff,fontSize:"12px",color:"#8888aa",marginBottom:"6px" }}>Paste exported text below, tap Load:</p>
-              <textarea ref={syncDataRef} defaultValue="" placeholder="Paste here..." style={{ ...IS,fontSize:"11px",fontFamily:"monospace",height:"72px",resize:"none",width:"100%",marginBottom:"8px" }}/>
-              <button onClick={loadFromPaste} style={{ width:"100%",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"11px",borderRadius:"9px",fontFamily:ff,fontSize:"14px",fontWeight:500 }}>Load</button>
-            </div>
-          )}
-          {syncMsg&&<p style={{ fontFamily:ff,fontSize:"13px",color:syncMsg.startsWith("✓")?"#4ade80":"#fbbf24",marginTop:"8px" }}>{syncMsg}</p>}
-        </div>
-      )}
 
       {/* TABS */}
       <div style={{ padding:"0 20px",borderBottom:"1px solid #1a1a28",display:"flex",gap:"4px",overflowX:"auto" }}>
