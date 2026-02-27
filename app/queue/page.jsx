@@ -154,6 +154,8 @@ function buildSchedule(shows, prefs, weekStart, today, startingEpOverride, watch
   // Carryover queues for preferred-day shows that couldn't fit on their preferred day
   let carrySolo = [];
   let carryTogether = [];
+// Only allow ONE "rolled-forward air-day placeholder" per show per week
+const weekPlaceholderUsed = new Set();
 
   DAYS.forEach((day, i) => {
     const dayDate = addDays(weekStart, i);
