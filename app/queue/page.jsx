@@ -1,5 +1,4 @@
-'use client'
-
+'use client';
 import { useState, useMemo, useEffect, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -170,6 +169,52 @@ function Modal({ show, onClose, children }) {
   );
 }
 
+// Poster uses Anthropic API + web_search to find poster image URLs, caches in localStorage
+async function fetchPosterUrl(title) {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 256,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        messages: [{
+          role: "user",
+          content: `Find the official poster image for TV show "${title}" from TVDB, TMDB, or IMDb. Return ONLY the direct image URL (starting with https://, ending in .jpg .png or .webp). Nothing else.`
+        }]
+      })
+    });
+    const data = await res.json();
+    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+    const match = text.match(/https?:\/\/[^\s"'<>]+\.(?:jpg|jpeg|png|webp)/i);
+    return match ? match[0] : null;
+  } catch { return null; }
+}
+
+function Poster({ show, size=80 }) {
+  const cacheKey = `tvq-poster-${show.id}`;
+  const [url, setUrl] = useState(() => { try { const v=localStorage.getItem(cacheKey); return (v&&v.startsWith("http"))?v:null; } catch { return null; } });
+  const [tried, setTried] = useState(false);
+  const color = SC[show.status]||"#6366f1";
+  const gc = GC[show.genre]||color;
+  useEffect(() => {
+    if (url || tried) return;
+    setTried(true);
+    fetchPosterUrl(show.title).then(p => {
+      if (p) { setUrl(p); try { localStorage.setItem(cacheKey, p); } catch {} }
+    });
+  }, [show.id, show.title]);
+  if (url) return <img src={url} alt={show.title} onError={()=>setUrl(null)}
+    style={{ width:size,height:size*1.5,objectFit:"cover",borderRadius:"8px",flexShrink:0,display:"block" }}/>;
+  const initials = show.title.split(" ").slice(0,2).map(w=>w[0]?.toUpperCase()||"").join("");
+  return (
+    <div style={{ width:size,height:size*1.5,borderRadius:"8px",flexShrink:0,background:`linear-gradient(135deg,${gc}33,${gc}11)`,
+      border:`1px solid ${gc}33`,display:"flex",alignItems:"center",justifyContent:"center" }}>
+      <span style={{ fontFamily:pf,fontSize:size*0.3,fontWeight:700,color:gc,opacity:0.8 }}>{initials}</span>
+    </div>
+  );
+}
 
 function SeasonDoneModal({ show, onNext, onComplete, onDismiss }) {
   const st = showStats(show);
@@ -192,7 +237,7 @@ function SeasonDoneModal({ show, onNext, onComplete, onDismiss }) {
 }
 
 const DSEASON = { totalEpisodes:"", episodesOut:"", episodeLength:"" };
-const DFORM = { title:"", emoji:"", genre:"", service:"", status:"Watching", multiSeason:false,
+const DFORM = { title:"", genre:"", service:"", status:"Watching", multiSeason:false,
   totalEpisodes:"", episodesOut:"", episodesWatched:"", episodeLength:"",
   seasons:[{...DSEASON}], currentSeason:1, episodesWatchedInSeason:"", airDays:[], watchDays:[], notes:"", rating:0 };
 
@@ -200,56 +245,57 @@ export default function App() {
   const [shows, setShows] = useState(() => { try{const s=localStorage.getItem("tvq-shows");if(s)return JSON.parse(s);}catch{}return DEFAULT_SHOWS; });
   const [prefs, setPrefs] = useState(() => { try{const p=localStorage.getItem("tvq-prefs");if(p)return JSON.parse(p);}catch{}return DEFAULT_PREFS; });
   const [watchedEps, setWatchedEps] = useState(() => { try{const w=localStorage.getItem("tvq-watched");if(w)return JSON.parse(w);}catch{}return {}; });
-  useEffect(()=>{ try{localStorage.setItem("tvq-shows",JSON.stringify(shows));}catch{} },[shows]);
-  useEffect(()=>{ try{localStorage.setItem("tvq-prefs",JSON.stringify(prefs));}catch{} },[prefs]);
-  useEffect(()=>{ try{localStorage.setItem("tvq-watched",JSON.stringify(watchedEps));}catch{} },[watchedEps]);
 
-  // ── Supabase auth + cloud sync ──
+  // --- AUTH + CLOUD SYNC (Supabase) ---
   const [session, setSession] = useState(null);
-  const [authMode, setAuthMode] = useState("signup"); // signup | login | magic
+  const [authPanel, setAuthPanel] = useState(false);
+  const [authMode, setAuthMode] = useState("magic"); // "signup" | "login" | "magic"
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authMsg, setAuthMsg] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [cloudMsg, setCloudMsg] = useState("");
 
-  // Prevent cloud-save from immediately overwriting cloud data before we load it.
-  const [cloudHydrated, setCloudHydrated] = useState(false);
-  const saveTimer = useRef(null);
-
+  // Get current session + listen for auth changes
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
+
     const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
-      setCloudHydrated(false);
+      // close the auth panel on successful login/logout
+      setAuthPanel(false);
+      setAuthMsg("");
     });
+
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  const userId = session?.user?.id || null;
-
   const signUp = async () => {
-    if (!authEmail || !authPassword) { setAuthMsg("Enter email + password."); return; }
-    setAuthBusy(true); setAuthMsg("");
+    setAuthBusy(true);
+    setAuthMsg("");
     const { error } = await supabase.auth.signUp({
       email: authEmail,
       password: authPassword,
       options: { emailRedirectTo: `${window.location.origin}/queue` },
     });
     setAuthBusy(false);
-    setAuthMsg(error ? error.message : "Account created. Check your email to confirm (if required), then log in.");
+    setAuthMsg(error ? error.message : "Check your email to confirm your account.");
   };
 
   const signIn = async () => {
-    if (!authEmail || !authPassword) { setAuthMsg("Enter email + password."); return; }
-    setAuthBusy(true); setAuthMsg("");
-    const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword });
+    setAuthBusy(true);
+    setAuthMsg("");
+    const { error } = await supabase.auth.signInWithPassword({
+      email: authEmail,
+      password: authPassword,
+    });
     setAuthBusy(false);
     setAuthMsg(error ? error.message : "");
   };
 
   const magicLink = async () => {
-    if (!authEmail) { setAuthMsg("Enter your email."); return; }
-    setAuthBusy(true); setAuthMsg("");
+    setAuthBusy(true);
+    setAuthMsg("");
     const { error } = await supabase.auth.signInWithOtp({
       email: authEmail,
       options: { emailRedirectTo: `${window.location.origin}/queue` },
@@ -262,19 +308,21 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
-  // Load from cloud once after login
+  // Load state from Supabase once logged in (tvq_state)
   useEffect(() => {
-    if (!userId) return;
+    if (!session?.user?.id) return;
     (async () => {
+      setCloudMsg("");
       const { data, error } = await supabase
         .from("tvq_state")
         .select("shows,prefs,watched")
-        .eq("user_id", userId)
-        .maybeSingle();
+        .eq("user_id", session.user.id)
+        .single();
 
-      if (error) {
-        console.error("Cloud load failed:", error);
-        setCloudHydrated(true); // allow saving anyway
+      // PGRST116 = no rows returned (first time user)
+      if (error && error.code !== "PGRST116") {
+        console.error(error);
+        setCloudMsg(`Cloud load failed: ${error.message}`);
         return;
       }
 
@@ -282,34 +330,42 @@ export default function App() {
       if (data?.prefs) setPrefs(data.prefs);
       if (data?.watched) setWatchedEps(data.watched);
 
-      setCloudHydrated(true);
+      setCloudMsg("✓ Synced from cloud");
+      setTimeout(() => setCloudMsg(""), 1500);
     })();
-  }, [userId]);
+  }, [session?.user?.id]);
 
-  // Save to cloud (debounced) when local state changes
+  // Debounced cloud save
+  const cloudSaveTimer = useRef(null);
   useEffect(() => {
-    if (!userId || !cloudHydrated) return;
+    if (!session?.user?.id) return;
 
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
+    if (cloudSaveTimer.current) clearTimeout(cloudSaveTimer.current);
+
+    cloudSaveTimer.current = setTimeout(async () => {
       const payload = {
-        user_id: userId,
+        user_id: session.user.id,
         shows,
         prefs,
         watched: watchedEps,
         updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
-        .from("tvq_state")
-        .upsert(payload, { onConflict: "user_id" });
-
-      if (error) console.error("Cloud save failed:", error);
+      const { error } = await supabase.from("tvq_state").upsert(payload, { onConflict: "user_id" });
+      if (error) {
+        console.error(error);
+        setCloudMsg(`Cloud save failed: ${error.message}`);
+      } else {
+        setCloudMsg("✓ Saved");
+        setTimeout(() => setCloudMsg(""), 1200);
+      }
     }, 600);
 
-    return () => saveTimer.current && clearTimeout(saveTimer.current);
-  }, [userId, cloudHydrated, shows, prefs, watchedEps]);
-
+    return () => cloudSaveTimer.current && clearTimeout(cloudSaveTimer.current);
+  }, [shows, prefs, watchedEps, session?.user?.id]);
+  useEffect(()=>{ try{localStorage.setItem("tvq-shows",JSON.stringify(shows));}catch{} },[shows]);
+  useEffect(()=>{ try{localStorage.setItem("tvq-prefs",JSON.stringify(prefs));}catch{} },[prefs]);
+  useEffect(()=>{ try{localStorage.setItem("tvq-watched",JSON.stringify(watchedEps));}catch{} },[watchedEps]);
 
   const [form, setForm] = useState(DFORM);
   const [showModal, setShowModal] = useState(false);
@@ -396,6 +452,25 @@ export default function App() {
     });
   };
 
+  const [syncPanel, setSyncPanel] = useState(false);
+  const [syncData, setSyncData] = useState("");
+  const [syncMsg, setSyncMsg] = useState("");
+  const [syncMode, setSyncMode] = useState("export");
+  const syncDataRef = useRef(null);
+  const importRef = useRef(null);
+
+  const generateExport = ()=>{ setSyncData(JSON.stringify({shows,prefs,watchedEps,version:1})); setSyncMode("export"); setSyncMsg(""); };
+  const loadFromPaste = ()=>{
+    const text=(syncDataRef.current?.value||syncData).trim();
+    if(!text){setSyncMsg("Paste your data first.");return;}
+    try{const d=JSON.parse(text);if(d.shows)setShows(d.shows);if(d.prefs)setPrefs(d.prefs);if(d.watchedEps)setWatchedEps(d.watchedEps);setSyncMsg("✓ Loaded!");setTimeout(()=>setSyncPanel(false),1200);}
+    catch{setSyncMsg("Invalid data.");}
+  };
+  const importData = e=>{
+    const file=e.target.files[0];if(!file)return;
+    const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(d.shows)setShows(d.shows);if(d.prefs)setPrefs(d.prefs);if(d.watchedEps)setWatchedEps(d.watchedEps);alert("✓ Imported!");}catch{alert("Invalid file.");}};
+    r.readAsText(file);e.target.value="";
+  };
 
   const del = id=>setShows(s=>s.filter(x=>x.id!==id));
   const toggleFDay = (day,field)=>setForm(f=>({...f,[field]:f[field].includes(day)?f[field].filter(d=>d!==day):[...f[field],day]}));
@@ -407,80 +482,10 @@ export default function App() {
     return [...base].sort((a,b)=>(a.sortOrder??9999)-(b.sortOrder??9999));
   },[shows,filter]);
 
-  // ── Login screen ──
-  if (!session) return (
-    <div style={{ minHeight:"100vh",background:"#050508",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px",position:"relative",overflow:"hidden" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@300;400;500&display=swap');
-        *{box-sizing:border-box;margin:0;padding:0}input{outline:none}button{cursor:pointer;border:none}
-        .login-input:focus{border-color:#6366f1!important;box-shadow:0 0 0 3px rgba(99,102,241,0.15)!important}
-        @keyframes floatup{0%{opacity:0;transform:translateY(20px)}100%{opacity:1;transform:translateY(0)}}
-        .login-card{animation:floatup .5s ease forwards}
-      `}</style>
-      <div style={{ position:"absolute",top:"-20%",left:"50%",transform:"translateX(-50%)",width:"600px",height:"600px",background:"radial-gradient(ellipse,rgba(99,102,241,0.12) 0%,transparent 70%)",pointerEvents:"none" }}/>
-      <div style={{ position:"absolute",bottom:"-10%",right:"-10%",width:"400px",height:"400px",background:"radial-gradient(ellipse,rgba(168,85,247,0.08) 0%,transparent 70%)",pointerEvents:"none" }}/>
-      <div className="login-card" style={{ width:"100%",maxWidth:"420px",position:"relative",zIndex:1 }}>
-        <div style={{ textAlign:"center",marginBottom:"44px" }}>
-          <div style={{ display:"inline-flex",alignItems:"center",gap:"10px",marginBottom:"12px" }}>
-            <div style={{ width:"42px",height:"42px",borderRadius:"12px",background:"linear-gradient(135deg,#6366f1,#a855f7)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 8px 24px rgba(99,102,241,0.4)" }}>
-              <span style={{ fontSize:"20px" }}>▶</span>
-            </div>
-            <h1 style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"38px",fontWeight:700,letterSpacing:"-1.5px",background:"linear-gradient(135deg,#c7d2fe,#e879f9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>NextUp</h1>
-          </div>
-          <p style={{ fontFamily:"'DM Sans',sans-serif",fontSize:"14px",color:"#4a4a6a" }}>Track what to watch, when to watch it.</p>
-        </div>
-        <div style={{ background:"rgba(15,15,24,0.95)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:"24px",padding:"36px 32px",boxShadow:"0 32px 80px rgba(0,0,0,0.7),0 0 0 1px rgba(99,102,241,0.08)",backdropFilter:"blur(20px)" }}>
-          <div style={{ display:"flex",gap:"6px",marginBottom:"24px",background:"#0a0a12",borderRadius:"12px",padding:"4px" }}>
-            {[["login","Sign in"],["signup","Create account"]].map(([m,l])=>(
-              <button key={m} onClick={()=>{setAuthMode(m);setAuthMsg("");}}
-                style={{ flex:1,padding:"8px",borderRadius:"9px",fontFamily:"'DM Sans',sans-serif",fontSize:"13px",fontWeight:500,transition:"all .15s",
-                  background:authMode===m?"linear-gradient(135deg,#6366f1,#a855f7)":"transparent",
-                  color:authMode===m?"#fff":"#5a5a8a",boxShadow:authMode===m?"0 2px 8px rgba(99,102,241,0.3)":"none" }}>{l}</button>
-            ))}
-          </div>
-          <div style={{ display:"flex",flexDirection:"column",gap:"14px" }}>
-            <div>
-              <label style={{ display:"block",fontFamily:"'DM Sans',sans-serif",fontSize:"11px",color:"#5a5a8a",fontWeight:500,letterSpacing:"0.7px",textTransform:"uppercase",marginBottom:"8px" }}>Email</label>
-              <input className="login-input" type="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&(authMode==="login"?signIn():signUp())}
-                placeholder="you@example.com"
-                style={{ width:"100%",background:"#0a0a12",border:"1px solid #1e1e30",borderRadius:"12px",color:"#e0e0f0",padding:"13px 16px",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",transition:"border-color .2s,box-shadow .2s" }}/>
-            </div>
-            <div>
-              <label style={{ display:"block",fontFamily:"'DM Sans',sans-serif",fontSize:"11px",color:"#5a5a8a",fontWeight:500,letterSpacing:"0.7px",textTransform:"uppercase",marginBottom:"8px" }}>Password</label>
-              <input className="login-input" type="password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&(authMode==="login"?signIn():signUp())}
-                placeholder="••••••••"
-                style={{ width:"100%",background:"#0a0a12",border:"1px solid #1e1e30",borderRadius:"12px",color:"#e0e0f0",padding:"13px 16px",fontSize:"14px",fontFamily:"'DM Sans',sans-serif",transition:"border-color .2s,box-shadow .2s" }}/>
-            </div>
-            {authMsg&&(
-              <div style={{ display:"flex",alignItems:"center",gap:"8px",padding:"10px 14px",borderRadius:"10px",background:authMsg.includes("Check")||authMsg.includes("created")?"#0c2010":"#1a0c0c",border:`1px solid ${authMsg.includes("Check")||authMsg.includes("created")?"#4ade8030":"#ef444430"}` }}>
-                <p style={{ fontFamily:"'DM Sans',sans-serif",fontSize:"13px",color:authMsg.includes("Check")||authMsg.includes("created")?"#4ade80":"#f87171" }}>{authMsg}</p>
-              </div>
-            )}
-            <button disabled={authBusy||!authEmail||!authPassword}
-              onClick={()=>authMode==="login"?signIn():signUp()}
-              style={{ width:"100%",background:authBusy?"#1a1a2a":"linear-gradient(135deg,#6366f1,#a855f7)",color:"#fff",padding:"14px",borderRadius:"12px",fontFamily:"'Space Grotesk',sans-serif",fontSize:"15px",fontWeight:600,letterSpacing:"-0.2px",opacity:authBusy?.5:1,boxShadow:authBusy?"none":"0 8px 24px rgba(99,102,241,0.35)",marginTop:"4px",transition:"opacity .2s" }}>
-              {authBusy?"Working…":authMode==="login"?"Sign in →":"Create account →"}
-            </button>
-            <div style={{ borderTop:"1px solid #1a1a28",paddingTop:"14px",textAlign:"center" }}>
-              <button onClick={()=>setAuthMode(authMode==="login"?"signup":"login")}
-                style={{ background:"none",color:"#3a3a5a",fontFamily:"'DM Sans',sans-serif",fontSize:"12px",padding:"4px" }}>
-                {authMode==="login"?"Don't have an account? Sign up":"Already have an account? Sign in"}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
   return (
     <div style={{ minHeight:"100vh",background:"#07070d",color:"#e2e2ef" }}>
-
-
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#0f0f14}::-webkit-scrollbar-thumb{background:#2a2a3a;border-radius:3px}
         input,select,textarea{outline:none}button{cursor:pointer;border:none}
@@ -496,21 +501,122 @@ export default function App() {
       {seasonDoneShow && <SeasonDoneModal show={seasonDoneShow} onNext={handleSeasonNext} onComplete={handleSeasonComplete} onDismiss={()=>setSeasonDoneShow(null)}/>}
 
       {/* HEADER */}
-      <div style={{ background:"linear-gradient(180deg,rgba(15,15,24,0.98),rgba(7,7,13,0.98))",borderBottom:"1px solid rgba(255,255,255,0.05)",padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px",flexWrap:"wrap",position:"sticky",top:0,zIndex:50 }}>
-        <div style={{ display:"flex",alignItems:"center",gap:"10px" }}>
-          <div style={{ width:"32px",height:"32px",borderRadius:"9px",background:"linear-gradient(135deg,#6366f1,#a855f7)",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 12px rgba(99,102,241,0.4)",flexShrink:0 }}>
-            <span style={{ fontSize:"15px",lineHeight:1 }}>▶</span>
-          </div>
-          <div>
-            <h1 style={{ fontFamily:"'Space Grotesk',sans-serif",fontSize:"22px",fontWeight:700,letterSpacing:"-0.8px",lineHeight:1,background:"linear-gradient(135deg,#c7d2fe,#e879f9)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>NextUp</h1>
-            <p style={{ color:"#3a3a5a",fontSize:"11px",marginTop:"2px",fontFamily:ff }}>{shows.filter(s=>s.status==="Watching").length} watching · {(weekMins/60).toFixed(1)}h this week</p>
-          </div>
+      <div style={{ background:"linear-gradient(180deg,#0f0f18,#07070d)",borderBottom:"1px solid #1a1a28",padding:"16px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"10px",flexWrap:"wrap" }}>
+        <div>
+          <h1 style={{ fontFamily:pf,fontSize:"24px",fontWeight:900,color:"#fff",lineHeight:1 }}>📺 Watch Queue</h1>
+          <p style={{ color:"#5a5a7a",fontSize:"12px",marginTop:"3px",fontFamily:ff }}>{shows.filter(s=>s.status==="Watching").length} active · {(weekMins/60).toFixed(1)} hrs this week</p>
         </div>
-        <div style={{ display:"flex",gap:"7px",alignItems:"center",flexWrap:"wrap" }}>
-          <button onClick={signOut} style={{ background:"rgba(255,255,255,0.04)",color:"#5a5a7a",border:"1px solid rgba(255,255,255,0.07)",padding:"8px 13px",borderRadius:"10px",fontFamily:ff,fontSize:"12px" }}>Sign out</button>
-          <button onClick={openAdd} style={{ background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"9px 18px",borderRadius:"10px",fontFamily:ff,fontWeight:600,fontSize:"13px",boxShadow:"0 4px 16px rgba(99,102,241,.35)",whiteSpace:"nowrap",letterSpacing:"-0.1px" }}>+ Add Show</button>
+        <div style={{ display:"flex",gap:"8px",alignItems:"center",flexWrap:"wrap" }}>
+          <button onClick={()=>setAuthPanel(v=>!v)} style={{ background:authPanel?"#6366f122":"#1a1a28",color:authPanel?"#a5b4fc":"#8888aa",border:`1px solid ${authPanel?"#6366f144":"#2a2a3a"}`,padding:"8px 14px",borderRadius:"10px",fontFamily:ff,fontWeight:500,fontSize:"13px",whiteSpace:"nowrap" }}>
+            {session? "Account" : "Sign in"}
+          </button>
+          {session && (
+            <div style={{ padding:"7px 10px",borderRadius:"10px",border:"1px solid #2a2a3a",background:"#0f0f18",color:"#9aa0c4",fontFamily:ff,fontSize:"12px",maxWidth:"220px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
+              {session.user.email}
+            </div>
+          )}
+          {cloudMsg && (
+            <div style={{ padding:"7px 10px",borderRadius:"10px",border:"1px solid #2a2a3a",background:"#0f0f18",color:"#9aa0c4",fontFamily:ff,fontSize:"12px",whiteSpace:"nowrap" }}>
+              {cloudMsg}
+            </div>
+          )}
+
+          <input ref={importRef} type="file" accept=".json" onChange={importData} style={{ display:"none" }}/>
+          <button onClick={()=>{ setSyncPanel(v=>!v); if(!syncPanel)generateExport(); }} style={{ background:syncPanel?"#6366f122":"#1a1a28",color:syncPanel?"#a5b4fc":"#8888aa",border:`1px solid ${syncPanel?"#6366f144":"#2a2a3a"}`,padding:"8px 14px",borderRadius:"10px",fontFamily:ff,fontSize:"13px",fontWeight:500 }}>🔄 Sync</button>
+          <button onClick={openAdd} style={{ background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"9px 18px",borderRadius:"10px",fontFamily:ff,fontWeight:500,fontSize:"14px",boxShadow:"0 4px 20px rgba(99,102,241,.4)",whiteSpace:"nowrap" }}>+ Add Show</button>
         </div>
       </div>
+
+
+      {/* AUTH PANEL */}
+      {authPanel && (
+        <div style={{ background:"#0f0f18",borderBottom:"1px solid #2a2a3a",padding:"16px 20px" }}>
+          <div style={{ maxWidth:1060,margin:"0 auto",display:"flex",justifyContent:"space-between",gap:"14px",flexWrap:"wrap",alignItems:"center" }}>
+            <div>
+              <div style={{ fontFamily:pf,fontSize:"18px",fontWeight:800,color:"#fff" }}>
+                {session ? "Account" : "Sign in / Create account"}
+              </div>
+              <div style={{ fontFamily:ff,fontSize:"12px",color:"#6c6c8d",marginTop:"3px" }}>
+                {session ? "You're signed in and synced across devices." : "Use email link or a password account."}
+              </div>
+            </div>
+
+            {!session ? (
+              <div style={{ display:"flex",gap:"10px",alignItems:"center",flexWrap:"wrap",width:"100%",maxWidth:"720px" }}>
+                <div style={{ display:"flex",gap:"8px",flexWrap:"wrap" }}>
+                  <button onClick={()=>setAuthMode("magic")} style={{ background:authMode==="magic"?"#6366f122":"#1a1a28",color:authMode==="magic"?"#a5b4fc":"#8888aa",border:`1px solid ${authMode==="magic"?"#6366f144":"#2a2a3a"}`,padding:"8px 12px",borderRadius:"10px",fontFamily:ff,fontWeight:500,fontSize:"12px" }}>Email link</button>
+                  <button onClick={()=>setAuthMode("login")} style={{ background:authMode==="login"?"#6366f122":"#1a1a28",color:authMode==="login"?"#a5b4fc":"#8888aa",border:`1px solid ${authMode==="login"?"#6366f144":"#2a2a3a"}`,padding:"8px 12px",borderRadius:"10px",fontFamily:ff,fontWeight:500,fontSize:"12px" }}>Log in</button>
+                  <button onClick={()=>setAuthMode("signup")} style={{ background:authMode==="signup"?"#6366f122":"#1a1a28",color:authMode==="signup"?"#a5b4fc":"#8888aa",border:`1px solid ${authMode==="signup"?"#6366f144":"#2a2a3a"}`,padding:"8px 12px",borderRadius:"10px",fontFamily:ff,fontWeight:500,fontSize:"12px" }}>Create account</button>
+                </div>
+
+                <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)} placeholder="Email"
+                  style={{ flex:"1 1 220px",minWidth:"220px",background:"#0b0b10",color:"#e2e2ef",border:"1px solid #2a2a3a",borderRadius:"10px",padding:"10px 12px",fontFamily:ff,fontSize:"13px" }} />
+
+                {authMode!=="magic" && (
+                  <input value={authPassword} onChange={e=>setAuthPassword(e.target.value)} placeholder="Password" type="password"
+                    style={{ flex:"1 1 180px",minWidth:"180px",background:"#0b0b10",color:"#e2e2ef",border:"1px solid #2a2a3a",borderRadius:"10px",padding:"10px 12px",fontFamily:ff,fontSize:"13px" }} />
+                )}
+
+                <button
+                  disabled={authBusy || !authEmail || (authMode!=="magic" && !authPassword)}
+                  onClick={()=>{ if(authMode==="signup") return signUp(); if(authMode==="login") return signIn(); return magicLink(); }}
+                  style={{ background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"10px 14px",borderRadius:"10px",fontFamily:ff,fontWeight:600,fontSize:"13px",opacity:(authBusy||!authEmail||(authMode!=="magic"&&!authPassword))?0.6:1,whiteSpace:"nowrap" }}
+                >
+                  {authBusy ? "Working..." : authMode==="signup" ? "Create" : authMode==="login" ? "Log in" : "Send link"}
+                </button>
+
+                {authMsg && (
+                  <div style={{ width:"100%",color:"#fca5a5",fontFamily:ff,fontSize:"12px",marginTop:"6px" }}>
+                    {authMsg}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ display:"flex",gap:"10px",alignItems:"center",flexWrap:"wrap" }}>
+                <div style={{ color:"#9aa0c4",fontFamily:ff,fontSize:"13px" }}>{session.user.email}</div>
+                <button onClick={signOut} style={{ background:"#1a1a28",color:"#d1d5ff",border:"1px solid #2a2a3a",padding:"9px 12px",borderRadius:"10px",fontFamily:ff,fontWeight:600,fontSize:"13px" }}>
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* SYNC PANEL */}
+      {syncPanel && (
+        <div style={{ background:"#0f0f18",borderBottom:"1px solid #2a2a3a",padding:"16px 20px" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"12px" }}>
+            <div><p style={{ fontFamily:pf,fontSize:"15px",fontWeight:700,color:"#f0f0ff",marginBottom:"3px" }}>Sync Between Devices</p><p style={{ fontFamily:ff,fontSize:"12px",color:"#5a5a7a" }}>Export your data as text, copy it, paste it on another device.</p></div>
+            <button onClick={()=>{setSyncPanel(false);setSyncData("");setSyncMsg("");}} style={{ background:"none",color:"#3a3a5a",fontSize:"18px",padding:"0 4px" }}>✕</button>
+          </div>
+          <div style={{ display:"flex",gap:"6px",marginBottom:"12px" }}>
+            {[["export","📤 Export"],["import","📥 Import"]].map(([m,l])=>(
+              <button key={m} onClick={()=>{setSyncMode(m);setSyncMsg("");if(m==="export")generateExport();else setSyncData("");}}
+                style={{ flex:1,background:syncMode===m?"#6366f122":"#13131e",color:syncMode===m?"#a5b4fc":"#5a5a7a",border:`1px solid ${syncMode===m?"#6366f144":"#2a2a3a"}`,padding:"9px",borderRadius:"8px",fontFamily:ff,fontSize:"13px",fontWeight:500 }}>{l}</button>
+            ))}
+          </div>
+          {syncMode==="export"&&syncData&&(
+            <div>
+              <p style={{ fontFamily:ff,fontSize:"12px",color:"#8888aa",marginBottom:"6px" }}>Copy all this text, paste it on your other device using Import:</p>
+              <div style={{ display:"flex",gap:"8px",alignItems:"stretch",marginBottom:"8px" }}>
+                <textarea ref={syncDataRef} readOnly value={syncData} onFocus={e=>e.target.select()} onClick={e=>e.target.select()}
+                  style={{ ...IS,flex:1,fontSize:"11px",fontFamily:"monospace",height:"72px",resize:"none",cursor:"text" }}/>
+                <button onClick={async()=>{ try{await navigator.clipboard.writeText(syncData);setSyncMsg("✓ Copied!");}catch{if(syncDataRef.current){syncDataRef.current.focus();syncDataRef.current.select();}setSyncMsg("Press Ctrl+C / Cmd+C to copy");} }}
+                  style={{ background:"#6366f1",color:"#fff",padding:"0 16px",borderRadius:"8px",fontFamily:ff,fontSize:"13px",fontWeight:500,whiteSpace:"nowrap",flexShrink:0 }}>📋 Copy</button>
+              </div>
+            </div>
+          )}
+          {syncMode==="import"&&(
+            <div>
+              <p style={{ fontFamily:ff,fontSize:"12px",color:"#8888aa",marginBottom:"6px" }}>Paste exported text below, tap Load:</p>
+              <textarea ref={syncDataRef} defaultValue="" placeholder="Paste here..." style={{ ...IS,fontSize:"11px",fontFamily:"monospace",height:"72px",resize:"none",width:"100%",marginBottom:"8px" }}/>
+              <button onClick={loadFromPaste} style={{ width:"100%",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",padding:"11px",borderRadius:"9px",fontFamily:ff,fontSize:"14px",fontWeight:500 }}>Load</button>
+            </div>
+          )}
+          {syncMsg&&<p style={{ fontFamily:ff,fontSize:"13px",color:syncMsg.startsWith("✓")?"#4ade80":"#fbbf24",marginTop:"8px" }}>{syncMsg}</p>}
+        </div>
+      )}
 
       {/* TABS */}
       <div style={{ padding:"0 20px",borderBottom:"1px solid #1a1a28",display:"flex",gap:"4px",overflowX:"auto" }}>
@@ -551,6 +657,7 @@ export default function App() {
                   onDragOver={e=>{e.preventDefault();setDragOverId(show.id);}} onDragLeave={()=>setDragOverId(null)}
                   style={{ background:"#0f0f18",border:"1px solid #1e1e2e",borderRadius:"14px",boxShadow:"0 4px 20px rgba(0,0,0,.4)",opacity:isDragging?0.45:1,cursor:"grab",transition:"opacity .15s" }}>
                   <div style={{ display:"flex",gap:"14px",padding:"14px" }}>
+                    <Poster show={show} size={72}/>
                     <div style={{ flex:1,minWidth:0 }}>
                       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"7px" }}>
                         <div style={{ flex:1,paddingRight:"8px" }}>
@@ -559,7 +666,7 @@ export default function App() {
                             {show.genre&&<span style={{ background:(GC[show.genre]||"#6366f1")+"22",color:GC[show.genre]||"#6366f1",fontSize:"10px",padding:"2px 7px",borderRadius:"10px",fontFamily:ff,border:`1px solid ${(GC[show.genre]||"#6366f1")}44` }}>{show.genre}</span>}
                             {isMS&&<span style={{ background:"#ffffff08",color:"#6666aa",fontSize:"10px",padding:"2px 7px",borderRadius:"10px",fontFamily:ff,border:"1px solid #2a2a3a" }}>{st.totalSeasons}S</span>}
                           </div>
-                          <h3 style={{ fontFamily:pf,fontSize:"16px",fontWeight:700,color:"#f0f0ff",lineHeight:1.2 }}>{show.emoji&&<span style={{marginRight:"6px"}}>{show.emoji}</span>}{show.title}</h3>
+                          <h3 style={{ fontFamily:pf,fontSize:"16px",fontWeight:700,color:"#f0f0ff",lineHeight:1.2 }}>{show.title}</h3>
                           {show.service&&<p style={{ color:"#5a5a7a",fontSize:"12px",fontFamily:ff,marginTop:"2px" }}>{show.service}</p>}
                         </div>
                         <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"5px",flexShrink:0 }}>
@@ -694,6 +801,10 @@ export default function App() {
                               border:`1px solid ${isUnreleased?"#fbbf2418":watched?"#4ade8028":isNewAirday?"#fbbf2430":sc2+"20"}`,
                               borderLeft:`3px solid ${isUnreleased?"#fbbf2466":watched?"#4ade80":isNewAirday?"#fbbf24":sc2}`,
                               cursor:isUnreleased?"default":"pointer",opacity:isUnreleased?.7:1 }}>
+                            {/* Mini poster */}
+                            <div style={{ width:"26px",height:"38px",borderRadius:"4px",overflow:"hidden",flexShrink:0 }}>
+                              <Poster show={show} size={26}/>
+                            </div>
                             <div style={{ width:"18px",height:"18px",borderRadius:"5px",flexShrink:0,
                               border:`2px solid ${isUnreleased?"#fbbf2444":watched?"#4ade80":sc2+"55"}`,
                               background:isUnreleased?"transparent":watched?"#4ade8018":"transparent",
@@ -702,7 +813,7 @@ export default function App() {
                               {isUnreleased&&<span style={{ color:"#fbbf24",fontSize:"10px" }}>🔒</span>}
                             </div>
                             <div style={{ flex:1,minWidth:0,opacity:watched?.65:1 }}>
-                              <div style={{ fontFamily:ff,fontSize:"12px",fontWeight:500,color:isUnreleased?"#8888aa":watched?"#4a7a4a":"#e0e0f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}</div>
+                              <div style={{ fontFamily:ff,fontSize:"12px",fontWeight:500,color:isUnreleased?"#8888aa":watched?"#4a7a4a":"#e0e0f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{show.title}</div>
                               <div style={{ display:"flex",gap:"8px",alignItems:"center",marginTop:"2px",flexWrap:"wrap" }}>
                                 <span style={{ fontFamily:ff,fontSize:"10px",color:watched?"#3a5a3a":isUnreleased?"#6a6a4a":"#6888aa" }}>
                                   {isMS2&&<span style={{ color:watched?"#3a5a3a":"#4a4a7a" }}>S{seasonNum} </span>}
@@ -761,9 +872,10 @@ export default function App() {
                 const outPctAll=st.totalEpisodesAll?Math.round(st.episodesOutAll/st.totalEpisodesAll*100):0;
                 return (
                   <div key={show.id} style={{ display:"flex",gap:"12px",alignItems:"center" }}>
+                    <Poster show={show} size={32}/>
                     <div style={{ flex:1 }}>
                       <div style={{ display:"flex",justifyContent:"space-between",marginBottom:"4px" }}>
-                        <span style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}{isMS&&<span style={{ color:"#4a4a7a",fontSize:"11px" }}> S{st.currentSeasonNum}/{st.totalSeasons}</span>}</span>
+                        <span style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.title}{isMS&&<span style={{ color:"#4a4a7a",fontSize:"11px" }}> S{st.currentSeasonNum}/{st.totalSeasons}</span>}</span>
                         <span style={{ fontFamily:ff,fontSize:"12px",color:"#5a5a7a" }}>{st.episodesWatchedAll}/{st.totalEpisodesAll}</span>
                       </div>
                       <div style={{ background:"#1a1a28",borderRadius:"4px",height:"6px",overflow:"hidden",position:"relative" }}>
@@ -787,8 +899,9 @@ export default function App() {
                 return (
                   <div key={show.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 13px",background:"#13131e",borderRadius:"8px" }}>
                     <div style={{ display:"flex",gap:"10px",alignItems:"center" }}>
+                      <Poster show={show} size={28}/>
                       <div>
-                        <div style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.emoji&&<span style={{marginRight:"5px"}}>{show.emoji}</span>}{show.title}</div>
+                        <div style={{ fontFamily:ff,fontSize:"13px",color:"#c0c0d8" }}>{show.title}</div>
                         <div style={{ fontFamily:ff,fontSize:"11px",color:"#5a5a7a" }}>{rem} ep left{avail>0&&<span style={{ color:"#60a5fa" }}> · {avail} available now</span>}</div>
                       </div>
                     </div>
@@ -805,10 +918,7 @@ export default function App() {
       <Modal show={showModal} onClose={()=>setShowModal(false)}>
         <h2 style={{ fontFamily:pf,fontSize:"20px",fontWeight:700,color:"#f0f0ff",marginBottom:"18px" }}>{editId?"Edit Show":"Add Show"}</h2>
         <div style={{ display:"flex",flexDirection:"column",gap:"14px" }}>
-          <div style={{ display:"grid",gridTemplateColumns:"80px 1fr",gap:"10px",alignItems:"end" }}>
-            <div><label style={LS}>Emoji</label><input value={form.emoji||""} onChange={e=>setForm(f=>({...f,emoji:e.target.value}))} placeholder="🎬" style={{...IS,fontSize:"22px",textAlign:"center",padding:"8px 6px"}}/></div>
-            <div><label style={LS}>Show Title *</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="e.g. The Bear" style={IS}/></div>
-          </div>
+          <div><label style={LS}>Show Title *</label><input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="e.g. The Bear" style={IS}/></div>
           <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px" }}>
             <div><label style={LS}>Genre</label><select value={form.genre} onChange={e=>setForm(f=>({...f,genre:e.target.value}))} style={IS}><option value="">Select...</option>{GENRES.map(g=><option key={g}>{g}</option>)}</select></div>
             <div><label style={LS}>Service</label><select value={form.service} onChange={e=>setForm(f=>({...f,service:e.target.value}))} style={IS}><option value="">Select...</option>{SERVICES.map(s=><option key={s}>{s}</option>)}</select></div>
