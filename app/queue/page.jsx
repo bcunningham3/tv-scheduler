@@ -3,6 +3,10 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
+<div style={{ position: "fixed", bottom: 10, right: 10, fontSize: 12, opacity: 0.6, zIndex: 99999 }}>
+  build: a081ccd
+</div>
+
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const FULL_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const GENRES = ["Drama","Comedy","Thriller","Sci-Fi","Fantasy","Horror","Documentary","Animation","Reality","Crime","Romance","Action"];
