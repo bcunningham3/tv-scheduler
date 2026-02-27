@@ -108,11 +108,23 @@ function buildSchedule(shows, prefs, weekStart, today, startingEpOverride, watch
     if (offDays.includes(day)) return;
     if (skippedDays && skippedDays.has(day)) return; // pulled forward — skip this day
     const maxM = minutesPerDay[day] ?? 90;
-    // Use per-mode budgets; if not yet configured (0), fall back to a split of the day total
-    const rawSolo = soloMins ? (soloMins[day] ?? 0) : 0;
-    const rawTogether = togetherMins ? (togetherMins[day] ?? 0) : 0;
-    const soloBudget = rawSolo > 0 ? rawSolo : Math.round(maxM * 0.65);
-    const togetherBudget = rawTogether > 0 ? rawTogether : Math.round(maxM * 0.35);
+   // Use per-mode budgets exactly as configured.
+// Only fall back to a split if BOTH modes are missing/empty for this day.
+const rawSolo = soloMins ? (soloMins[day] ?? null) : null;
+const rawTogether = togetherMins ? (togetherMins[day] ?? null) : null;
+
+const hasSolo = rawSolo !== null;
+const hasTogether = rawTogether !== null;
+
+let soloBudget, togetherBudget;
+
+if (!hasSolo && !hasTogether) {
+  soloBudget = Math.round(maxM * 0.65);
+  togetherBudget = Math.round(maxM * 0.35);
+} else {
+  soloBudget = hasSolo ? Number(rawSolo) : 0;
+  togetherBudget = hasTogether ? Number(rawTogether) : 0;
+}
     const items = []; let soloUsed = 0; let togetherUsed = 0; const placed = new Set();
     const pinnedHere = active.filter(s => s.watchDays && s.watchDays.includes(day));
     const autoShows  = active.filter(s => !s.watchDays || s.watchDays.length === 0);
@@ -127,7 +139,7 @@ function buildSchedule(shows, prefs, weekStart, today, startingEpOverride, watch
       if (maxEp === 0 || startEp > maxEp) return;
       const releasedMax = st.episodesOutInCurrentSeason;
       const isTogether = show.viewingMode === "together";
-      const modeBudget = isTogether ? togetherBudget : soloBudget;
+      const modeBudget = isTogether ? togetherBudget : soloBudget; if (modeBudget <= 0) return;
       const modeUsed = isTogether ? togetherUsed : soloUsed;
       const budget = pinned ? modeBudget : modeBudget - modeUsed;
       // Always allow at least 1 episode if there's any budget remaining for this mode
