@@ -7,6 +7,8 @@ import { supabase } from "../../lib/supabaseClient";
   build: a081ccd
 </div>
 
+console.log("NEW SCHEDULER LOGIC ACTIVE");
+
 const DEFAULT_PREFS = { offDays:["Sun"], minutesPerDay:{ Mon:90,Tue:60,Wed:60,Thu:60,Fri:90,Sat:120,Sun:0 }, soloMins:{ Mon:60,Tue:45,Wed:45,Thu:45,Fri:60,Sat:75,Sun:0 }, togetherMins:{ Mon:30,Tue:15,Wed:15,Thu:15,Fri:30,Sat:45,Sun:0 } };
 
 function normalizePrefs(p) {
