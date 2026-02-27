@@ -153,11 +153,18 @@ const autoShows  = active.filter(s => !s.watchDays || s.watchDays.length === 0);
       // Always allow at least 1 episode if there's any budget remaining for this mode
       const slots = budget > 0 ? Math.max(1, Math.floor(budget / Math.max(len,1))) : 0;
       const availableReleased = Math.max(0, releasedMax - startEp + 1);
-      const count = availableReleased > 0 ? Math.min(slots, maxEp - startEp + 1) : isAirDay ? 1 : 0;
-const byAirDay = (a,b) => {
-  const an = (a.airDays||[]).includes(day) || (a.airDays||[]).includes(dayFull) ? 0 : 1;
-  const bn = (b.airDays||[]).includes(day) || (b.airDays||[]).includes(dayFull) ? 0 : 1;
-  return an - bn;
+
+let count = 0;
+if (availableReleased > 0) {
+  // Normal behavior: schedule released episodes
+  count = Math.min(slots, maxEp - startEp + 1);
+} else if (pinned && slots > 0) {
+  // If a show is pinned to this day, still show it even if the next episode isn't released yet.
+  // (It will be marked isUnreleased in the item.)
+  count = Math.min(1, maxEp - startEp + 1);
+} else if (isAirDay) {
+  // Otherwise only show unreleased placeholders on the air day
+  count = 1;
 };
       if (count <= 0) return;
       for (let i = 0; i < count; i++) {
