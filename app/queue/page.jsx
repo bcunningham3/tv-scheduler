@@ -243,31 +243,57 @@ function buildSchedule(shows, prefs, weekStart, today, startingEpOverride, watch
       if (availableReleased > 0) {
         const slots = Math.floor(remaining / Math.max(len, 1));
         count = Math.min(slots, maxEp - startEp + 1);
-      } else if (isAirDay) {
-        // Unreleased placeholder ONLY on actual air day, and only if we have time
-        count = 1;
       } else {
-        return true;
-      }
+  // If we don't have confirmed released episodes (episodesOutInCurrentSeason not updated),
+  // allow the "new ep" placeholder to roll forward for the rest of the week after the air day.
+  const airIdx = (() => {
+    const ad = show.airDays || [];
+    for (let di = 0; di < 7; di++) {
+      const d = DAYS[di];
+      const df = FULL_DAYS[di];
+      if (ad.includes(d) || ad.includes(df)) return di;
+    }
+    return -1;
+  })();
+
+  const hasAiredThisWeek = airIdx >= 0 && i >= airIdx;
+
+  if (hasAiredThisWeek) {
+    count = 1;
+  } else {
+    return true;
+  }
+}
 
       if (count <= 0) return false;
 
       for (let ii = 0; ii < count; ii++) {
         const epNum = startEp + ii;
         const key = `${show.id}:s${season}e${epNum}`;
-        const isUnreleased = epNum > releasedMax;
+     const assumedReleased = (() => {
+  const ad = show.airDays || [];
+  let airIdx = -1;
+  for (let di = 0; di < 7; di++) {
+    const d = DAYS[di];
+    const df = FULL_DAYS[di];
+    if (ad.includes(d) || ad.includes(df)) { airIdx = di; break; }
+  }
+  return airIdx >= 0 && i > airIdx; // after the air day, assume it's released
+})();
 
-        items.push({
-          show,
-          key,
-          episodeNum: epNum,
-          seasonNum: season,
-          epLength: len,
-          isNewAirday: isAirDay && ii === 0,
-          isUnreleased,
-          isTogether,
-          ...flags
-        });
+const isUnreleased = !assumedReleased && (epNum > releasedMax);
+
+items.push({
+  show,
+  key,
+  episodeNum: epNum,
+  seasonNum: season,
+  epLength: len,
+  isNewAirday: isAirDay && ii === 0,
+  isUnreleased,
+  isTogether,
+  ...flags
+});
       }
 
       if (isTogether) togetherUsed += len * count;
