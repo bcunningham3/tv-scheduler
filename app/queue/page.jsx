@@ -102,6 +102,11 @@ function buildSchedule(shows, prefs, weekStart, today, startingEpOverride, watch
   });
   const sched = {};
   DAYS.forEach((day, i) => { sched[day] = { items:[], date:addDays(weekStart,i), usedMins:0 }; });
+
+  // Carryover queues for "preferred day" shows that couldn't fit on their preferred day
+  let carrySolo = [];
+  let carryTogether = [];
+
   DAYS.forEach((day, i) => {
   const dayDate = addDays(weekStart, i);
     if (today && dayDate < today) return;
@@ -130,55 +135,133 @@ const items = []; let soloUsed = 0; let togetherUsed = 0; const placed = new Set
 const dayIdx = DAYS.indexOf(day);
 const dayFull = dayIdx >= 0 ? FULL_DAYS[dayIdx] : day;
 
-const pinnedHere = active.filter(s => {
+// Copy carryovers for today, then reset so we can build tomorrow’s carryover fresh
+const queuedSolo = carrySolo.slice();
+const queuedTogether = carryTogether.slice();
+carrySolo = [];
+carryTogether = [];
+
+// "Preferred today" means either:
+// 1) explicitly pinned via watchDays, OR
+// 2) it’s the release day (airDays includes today)
+// BUT it's still a recommendation — if it can't fit, it rolls forward.
+const preferredToday = active.filter(s => {
   const wd = s.watchDays || [];
-  return wd.includes(day) || wd.includes(dayFull);
+  const pinnedByWatchDay = wd.includes(day) || wd.includes(dayFull);
+
+  const ad = s.airDays || [];
+  const pinnedByReleaseDay = ad.includes(day) || ad.includes(dayFull);
+
+  return pinnedByWatchDay || pinnedByReleaseDay;
 });
 
-const autoShows  = active.filter(s => !s.watchDays || s.watchDays.length === 0);
-    const byAirDay = (a,b) => { const an=a.airDays&&a.airDays.includes(day)?0:1, bn=b.airDays&&b.airDays.includes(day)?0:1; return an-bn; };
-    pinnedHere.sort(byAirDay);
-    autoShows.sort(byAirDay);
-    const placeShow = (show, flags, pinned) => {
-      if (placed.has(show.id)) return;
-      const st = showStats(show); const len = st.episodeLength || 45;
-      const isAirDay = (show.airDays || []).includes(day) || (show.airDays || []).includes(dayFull);
-      const { ep: startEp, season, maxEp } = nextEp[show.id];
-      if (maxEp === 0 || startEp > maxEp) return;
-      const releasedMax = st.episodesOutInCurrentSeason;
-      const isTogether = show.viewingMode === "together";
-      const modeBudget = isTogether ? togetherBudget : soloBudget; if (modeBudget <= 0) return;
-      const modeUsed = isTogether ? togetherUsed : soloUsed;
-      const budget = pinned ? modeBudget : modeBudget - modeUsed;
-      // Always allow at least 1 episode if there's any budget remaining for this mode
-      const slots = budget > 0 ? Math.max(1, Math.floor(budget / Math.max(len,1))) : 0;
-      const availableReleased = Math.max(0, releasedMax - startEp + 1);
+// Auto shows are still shows with no watchDays set
+const autoShows = active.filter(s => !s.watchDays || s.watchDays.length === 0);
 
-let count = 0;
-if (availableReleased > 0) {
-  // Normal behavior: schedule released episodes
-  count = Math.min(slots, maxEp - startEp + 1);
-} else if (pinned && slots > 0) {
-  // If a show is pinned to this day, still show it even if the next episode isn't released yet.
-  // (It will be marked isUnreleased in the item.)
-  count = Math.min(1, maxEp - startEp + 1);
-} else if (isAirDay) {
-  // Otherwise only show unreleased placeholders on the air day
-  count = 1;
+const byAirDay = (a,b) => {
+  const an = (a.airDays && (a.airDays.includes(day) || a.airDays.includes(dayFull))) ? 0 : 1;
+  const bn = (b.airDays && (b.airDays.includes(day) || b.airDays.includes(dayFull))) ? 0 : 1;
+  return an - bn;
 };
-      if (count <= 0) return;
-      for (let i = 0; i < count; i++) {
-        const epNum = startEp + i;
-        const key = `${show.id}:s${season}e${epNum}`;
-        const isUnreleased = epNum > releasedMax;
-        items.push({ show, key, episodeNum:epNum, seasonNum:season, epLength:len, isNewAirday:isAirDay&&i===0, isUnreleased, isTogether, ...flags });
-      }
-      if (isTogether) togetherUsed += len * count; else soloUsed += len * count;
-      nextEp[show.id] = { ...nextEp[show.id], ep: startEp + count };
-      placed.add(show.id);
-    };
-    pinnedHere.forEach(s => placeShow(s, { isPinned:true }, true));
-    autoShows.forEach(s => placeShow(s, { isAuto:true }, false));
+preferredToday.sort(byAirDay);
+autoShows.sort(byAirDay);
+
+// IMPORTANT: placeShow now returns true/false. If false and it's "preferred", we carry it to the next day.
+const placeShow = (show, flags) => {
+  if (placed.has(show.id)) return true;
+
+  const st = showStats(show);
+  const len = st.episodeLength || 45;
+
+  const isTogether = show.viewingMode === "together";
+  const modeBudget = isTogether ? togetherBudget : soloBudget;
+  if (modeBudget <= 0) return false;
+
+  const modeUsed = isTogether ? togetherUsed : soloUsed;
+  const remaining = modeBudget - modeUsed;
+
+  // If there's not enough time left for even 1 episode, we can't place it today.
+  if (remaining < len) return false;
+
+  const isAirDay = (show.airDays || []).includes(day) || (show.airDays || []).includes(dayFull);
+
+  const { ep: startEp, season, maxEp } = nextEp[show.id];
+  if (maxEp === 0 || startEp > maxEp) return true;
+
+  const releasedMax = st.episodesOutInCurrentSeason;
+  const availableReleased = Math.max(0, releasedMax - startEp + 1);
+
+  // Do NOT generate unreleased placeholders just because it's "preferred".
+  // Only show placeholder on actual air day, and only if we have time.
+  let count = 0;
+  if (availableReleased > 0) {
+    const slots = Math.floor(remaining / Math.max(len, 1));
+    count = Math.min(slots, maxEp - startEp + 1);
+  } else if (isAirDay) {
+    count = 1; // unreleased placeholder on air day only
+  } else {
+    return true;
+  }
+
+  if (count <= 0) return false;
+
+  for (let ii = 0; ii < count; ii++) {
+    const epNum = startEp + ii;
+    const key = `${show.id}:s${season}e${epNum}`;
+    const isUnreleased = epNum > releasedMax;
+    items.push({
+      show,
+      key,
+      episodeNum: epNum,
+      seasonNum: season,
+      epLength: len,
+      isNewAirday: isAirDay && ii === 0,
+      isUnreleased,
+      isTogether,
+      ...flags
+    });
+  }
+
+  if (isTogether) togetherUsed += len * count; else soloUsed += len * count;
+  nextEp[show.id] = { ...nextEp[show.id], ep: startEp + count };
+  placed.add(show.id);
+  return true;
+};
+
+// 1) First try anything that rolled over from earlier days
+queuedSolo.forEach(s => {
+  const ok = placeShow(s, { isPinned:true });
+  if (!ok) carrySolo.push(s);
+});
+queuedTogether.forEach(s => {
+  const ok = placeShow(s, { isPinned:true });
+  if (!ok) carryTogether.push(s);
+});
+
+// 2) Then try preferred shows for today; if they don’t fit, roll them forward
+preferredToday.forEach(s => {
+  if (placed.has(s.id)) return;
+  const ok = placeShow(s, { isPinned:true });
+  if (!ok) {
+    if (s.viewingMode === "together") carryTogether.push(s);
+    else carrySolo.push(s);
+  }
+});
+
+// 3) Then fill remaining time with auto shows
+autoShows.forEach(s => {
+  if (placed.has(s.id)) return;
+  placeShow(s, { isAuto:true });
+});
+
+// Sort items: solo first, then together (grouped)
+items.sort((a,b) => (a.isTogether ? 1 : 0) - (b.isTogether ? 1 : 0));
+
+const dayUsedMins = soloUsed + togetherUsed;
+sched[day].items = items;
+sched[day].usedMins = dayUsedMins;
+sched[day].soloUsed = soloUsed;
+sched[day].togetherUsed = togetherUsed;
     // Sort items: solo first, then together (grouped)
     items.sort((a,b) => (a.isTogether?1:0) - (b.isTogether?1:0));
     const usedMins = soloUsed + togetherUsed;
