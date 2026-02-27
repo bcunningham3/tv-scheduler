@@ -281,7 +281,7 @@ function buildSchedule(shows, prefs, weekStart, today, startingEpOverride, watch
   return airIdx >= 0 && i > airIdx; // after the air day, assume it's released
 })();
 
-const isUnreleased = !assumedReleased && (epNum > releasedMax);
+const isUnreleased = (epNum > releasedMax) && !isAirDay;
 
 items.push({
   show,
