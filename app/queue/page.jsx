@@ -260,11 +260,15 @@ const weekPlaceholderUsed = new Set();
 
   const hasAiredThisWeek = airIdx >= 0 && i >= airIdx;
 
-  if (hasAiredThisWeek) {
-    count = 1;
-  } else {
-    return true;
-  }
+if (hasAiredThisWeek) {
+  // If we already created the "this week's new ep" placeholder for this show,
+  // do NOT create another one later in the week.
+  if (weekPlaceholderUsed.has(show.id)) return true;
+  weekPlaceholderUsed.add(show.id);
+  count = 1;
+} else {
+  return true;
+}
 }
 
       if (count <= 0) return false;
