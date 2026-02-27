@@ -3,9 +3,54 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-<div style={{ position: "fixed", bottom: 10, right: 10, fontSize: 12, opacity: 0.6, zIndex: 99999 }}>
-  build: a081ccd
-</div>
+const DEFAULT_PREFS = { offDays:["Sun"], minutesPerDay:{ Mon:90,Tue:60,Wed:60,Thu:60,Fri:90,Sat:120,Sun:0 }, soloMins:{ Mon:60,Tue:45,Wed:45,Thu:45,Fri:60,Sat:75,Sun:0 }, togetherMins:{ Mon:30,Tue:15,Wed:15,Thu:15,Fri:30,Sat:45,Sun:0 } };
+
+function normalizePrefs(p) {
+  const src = p && typeof p === "object" ? p : {};
+
+  // Start with defaults
+  const merged = {
+    ...DEFAULT_PREFS,
+    ...src,
+    minutesPerDay: { ...DEFAULT_PREFS.minutesPerDay, ...(src.minutesPerDay || {}) },
+    soloMins: { ...DEFAULT_PREFS.soloMins, ...(src.soloMins || {}) },
+    togetherMins: { ...DEFAULT_PREFS.togetherMins, ...(src.togetherMins || {}) },
+    offDays: Array.isArray(src.offDays) ? src.offDays : DEFAULT_PREFS.offDays,
+  };
+
+  // Migration: if an older cloud/local prefs object only has minutesPerDay,
+  // generate soloMins/togetherMins from it (65/35 split)
+  const missingSolo = !src.soloMins || Object.keys(src.soloMins || {}).length === 0;
+  const missingTogether = !src.togetherMins || Object.keys(src.togetherMins || {}).length === 0;
+
+  if ((missingSolo && missingTogether) && src.minutesPerDay) {
+    const solo = {};
+    const together = {};
+    DAYS.forEach(d => {
+      const max = Number(src.minutesPerDay?.[d] ?? DEFAULT_PREFS.minutesPerDay[d] ?? 0);
+      const s = Math.round(max * 0.65);
+      solo[d] = s;
+      together[d] = Math.max(0, max - s);
+    });
+    merged.soloMins = solo;
+    merged.togetherMins = together;
+  }
+
+  return merged;
+}
+
+function normalizeShows(arr) {
+  const list = Array.isArray(arr) ? arr : [];
+  return list.map(s => {
+    const vm = (s.viewingMode || "solo").toString().toLowerCase(); // normalize "Solo"/"Together"
+    return {
+      ...s,
+      viewingMode: vm === "together" ? "together" : "solo",
+      airDays: Array.isArray(s.airDays) ? s.airDays : [],
+      watchDays: Array.isArray(s.watchDays) ? s.watchDays : [],
+    };
+  });
+}
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const FULL_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
@@ -28,7 +73,6 @@ const DEFAULT_SHOWS = [
     seasons:[{totalEpisodes:13,episodesOut:13,episodeLength:58},{totalEpisodes:12,episodesOut:12,episodeLength:58},{totalEpisodes:12,episodesOut:12,episodeLength:58},{totalEpisodes:13,episodesOut:13,episodeLength:58},{totalEpisodes:10,episodesOut:10,episodeLength:58}],
     currentSeason:1, episodesWatchedInSeason:0, airDays:[], watchDays:[], notes:"Been meaning to watch forever", rating:0, sortOrder:2 },
 ];
-const DEFAULT_PREFS = { offDays:["Sun"], minutesPerDay:{ Mon:90,Tue:60,Wed:60,Thu:60,Fri:90,Sat:120,Sun:0 }, soloMins:{ Mon:60,Tue:45,Wed:45,Thu:45,Fri:60,Sat:75,Sun:0 }, togetherMins:{ Mon:30,Tue:15,Wed:15,Thu:15,Fri:30,Sat:45,Sun:0 } };
 
 function getWeekStart(date) {
   const d = new Date(date); d.setHours(0,0,0,0);
@@ -329,8 +373,21 @@ const DFORM = { title:"", emoji:"", genre:"", service:"", status:"Watching", vie
   seasons:[{...DSEASON}], currentSeason:1, episodesWatchedInSeason:"", airDays:[], watchDays:[], notes:"", rating:0 };
 
 export default function App() {
-  const [shows, setShows] = useState(() => { try{const s=localStorage.getItem("tvq-shows");if(s)return JSON.parse(s);}catch{}return DEFAULT_SHOWS; });
-  const [prefs, setPrefs] = useState(() => { try{const p=localStorage.getItem("tvq-prefs");if(p)return JSON.parse(p);}catch{}return DEFAULT_PREFS; });
+  const [shows, setShows] = useState(() => {
+  try {
+    const s = localStorage.getItem("tvq-shows");
+    if (s) return normalizeShows(JSON.parse(s));
+  } catch {}
+  return normalizeShows(DEFAULT_SHOWS);
+});
+
+const [prefs, setPrefs] = useState(() => {
+  try {
+    const p = localStorage.getItem("tvq-prefs");
+    if (p) return normalizePrefs(JSON.parse(p));
+  } catch {}
+  return normalizePrefs(DEFAULT_PREFS);
+});
   const [watchedEps, setWatchedEps] = useState(() => { try{const w=localStorage.getItem("tvq-watched");if(w)return JSON.parse(w);}catch{}return {}; });
   const [pulledDays, setPulledDays] = useState(new Set()); // days that have been pulled forward
   useEffect(()=>{ try{localStorage.setItem("tvq-shows",JSON.stringify(shows));}catch{} },[shows]);
@@ -411,9 +468,9 @@ export default function App() {
         return;
       }
 
-      if (data?.shows) setShows(data.shows);
-      if (data?.prefs) setPrefs(data.prefs);
-      if (data?.watched) setWatchedEps(data.watched);
+      if (data?.shows) setShows(normalizeShows(data.shows));
+if (data?.prefs) setPrefs(normalizePrefs(data.prefs));
+if (data?.watched) setWatchedEps(data.watched);
 
       setCloudHydrated(true);
     })();
