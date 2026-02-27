@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
-import { supabase } from "../../lib/supabaseClient";
 import { useState, useMemo, useEffect, useRef, Fragment } from "react";
+import { supabase } from "../../lib/supabaseClient";
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const FULL_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
