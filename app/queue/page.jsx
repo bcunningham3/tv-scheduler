@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 
 const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const FULL_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
@@ -743,7 +744,7 @@ export default function App() {
                         const curS=isMS2?(show.seasons[seasonNum-1]||{}):null;
                         const epMax=isMS2?(curS.totalEpisodes||"?"):(show.totalEpisodes||"?");
                         return (
-                          <React.Fragment key={key}>
+                          <Fragment key={key}>
                           {showDivider&&<div style={{ display:"flex",alignItems:"center",gap:"8px",padding:"4px 0 2px" }}>
                             <div style={{ flex:1,height:"1px",background:"#f472b622" }}/>
                             <span style={{ fontFamily:ff,fontSize:"9px",color:"#f472b6",fontWeight:600,letterSpacing:"0.5px" }}>❤️ TOGETHER</span>
@@ -779,7 +780,7 @@ export default function App() {
                               </div>
                             </div>
                           </div>
-                          </React.Fragment>
+                          </Fragment>
                         );
                       })}
                     </div>
