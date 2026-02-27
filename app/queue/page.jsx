@@ -3,12 +3,6 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-<div style={{ position: "fixed", bottom: 8, right: 8, fontSize: 12, opacity: 0.6, zIndex: 9999 }}>
-  build: a081ccd
-</div>
-
-console.log("NEW SCHEDULER LOGIC ACTIVE");
-
 const DEFAULT_PREFS = { offDays:["Sun"], minutesPerDay:{ Mon:90,Tue:60,Wed:60,Thu:60,Fri:90,Sat:120,Sun:0 }, soloMins:{ Mon:60,Tue:45,Wed:45,Thu:45,Fri:60,Sat:75,Sun:0 }, togetherMins:{ Mon:30,Tue:15,Wed:15,Thu:15,Fri:30,Sat:45,Sun:0 } };
 
 function normalizePrefs(p) {
@@ -155,171 +149,169 @@ function buildSchedule(shows, prefs, weekStart, today, startingEpOverride, watch
     nextEp[s.id] = { ep: startEp, season: st.currentSeasonNum, maxEp: hardCap };
   });
   const sched = {};
-  DAYS.forEach((day, i) => { sched[day] = { items:[], date:addDays(weekStart,i), usedMins:0 }; });
+  DAYS.forEach((day, i) => { sched[day] = { items: [], date: addDays(weekStart, i), usedMins: 0 }; });
 
-  // Carryover queues for "preferred day" shows that couldn't fit on their preferred day
+  // Carryover queues for preferred-day shows that couldn't fit on their preferred day
   let carrySolo = [];
   let carryTogether = [];
 
   DAYS.forEach((day, i) => {
-  const dayDate = addDays(weekStart, i);
+    const dayDate = addDays(weekStart, i);
     if (today && dayDate < today) return;
     if (offDays.includes(day)) return;
     if (skippedDays && skippedDays.has(day)) return; // pulled forward — skip this day
+
     const maxM = minutesPerDay[day] ?? 90;
-   // Use per-mode budgets exactly as configured.
-// Only fall back to a split if BOTH modes are missing/empty for this day.
-const rawSolo = soloMins ? (soloMins[day] ?? null) : null;
-const rawTogether = togetherMins ? (togetherMins[day] ?? null) : null;
 
-const hasSolo = rawSolo !== null;
-const hasTogether = rawTogether !== null;
+    // Use per-mode budgets exactly as configured.
+    // Only fall back to a split if BOTH modes are missing/empty for this day.
+    const rawSolo = soloMins ? (soloMins[day] ?? null) : null;
+    const rawTogether = togetherMins ? (togetherMins[day] ?? null) : null;
 
-let soloBudget, togetherBudget;
+    const hasSolo = rawSolo !== null;
+    const hasTogether = rawTogether !== null;
 
-if (!hasSolo && !hasTogether) {
-  soloBudget = Math.round(maxM * 0.65);
-  togetherBudget = Math.round(maxM * 0.35);
-} else {
-  soloBudget = hasSolo ? Number(rawSolo) : 0;
-  togetherBudget = hasTogether ? Number(rawTogether) : 0;
-}
-const items = []; let soloUsed = 0; let togetherUsed = 0; const placed = new Set();
+    let soloBudget, togetherBudget;
+    if (!hasSolo && !hasTogether) {
+      soloBudget = Math.round(maxM * 0.65);
+      togetherBudget = Math.round(maxM * 0.35);
+    } else {
+      soloBudget = hasSolo ? Number(rawSolo) : 0;
+      togetherBudget = hasTogether ? Number(rawTogether) : 0;
+    }
 
-const dayIdx = DAYS.indexOf(day);
-const dayFull = dayIdx >= 0 ? FULL_DAYS[dayIdx] : day;
+    // Pull in anything that couldn't fit on prior days
+    const queuedSolo = carrySolo.slice();
+    const queuedTogether = carryTogether.slice();
+    carrySolo = [];
+    carryTogether = [];
 
-// Copy carryovers for today, then reset so we can build tomorrow’s carryover fresh
-const queuedSolo = carrySolo.slice();
-const queuedTogether = carryTogether.slice();
-carrySolo = [];
-carryTogether = [];
+    const items = [];
+    let soloUsed = 0;
+    let togetherUsed = 0;
+    const placed = new Set();
 
-// "Preferred today" means either:
-// 1) explicitly pinned via watchDays, OR
-// 2) it’s the release day (airDays includes today)
-// BUT it's still a recommendation — if it can't fit, it rolls forward.
-const preferredToday = active.filter(s => {
-  const wd = s.watchDays || [];
-  const pinnedByWatchDay = wd.includes(day) || wd.includes(dayFull);
+    const dayIdx = DAYS.indexOf(day);
+    const dayFull = dayIdx >= 0 ? FULL_DAYS[dayIdx] : day;
 
-  const ad = s.airDays || [];
-  const pinnedByReleaseDay = ad.includes(day) || ad.includes(dayFull);
-
-  return pinnedByWatchDay || pinnedByReleaseDay;
-});
-
-// Auto shows are still shows with no watchDays set
-const autoShows = active.filter(s => !s.watchDays || s.watchDays.length === 0);
-
-const byAirDay = (a,b) => {
-  const an = (a.airDays && (a.airDays.includes(day) || a.airDays.includes(dayFull))) ? 0 : 1;
-  const bn = (b.airDays && (b.airDays.includes(day) || b.airDays.includes(dayFull))) ? 0 : 1;
-  return an - bn;
-};
-preferredToday.sort(byAirDay);
-autoShows.sort(byAirDay);
-
-// IMPORTANT: placeShow now returns true/false. If false and it's "preferred", we carry it to the next day.
-const placeShow = (show, flags) => {
-  if (placed.has(show.id)) return true;
-
-  const st = showStats(show);
-  const len = st.episodeLength || 45;
-
-  const isTogether = show.viewingMode === "together";
-  const modeBudget = isTogether ? togetherBudget : soloBudget;
-  if (modeBudget <= 0) return false;
-
-  const modeUsed = isTogether ? togetherUsed : soloUsed;
-  const remaining = modeBudget - modeUsed;
-
-  // If there's not enough time left for even 1 episode, we can't place it today.
-  if (remaining < len) return false;
-
-  const isAirDay = (show.airDays || []).includes(day) || (show.airDays || []).includes(dayFull);
-
-  const { ep: startEp, season, maxEp } = nextEp[show.id];
-  if (maxEp === 0 || startEp > maxEp) return true;
-
-  const releasedMax = st.episodesOutInCurrentSeason;
-  const availableReleased = Math.max(0, releasedMax - startEp + 1);
-
-  // Do NOT generate unreleased placeholders just because it's "preferred".
-  // Only show placeholder on actual air day, and only if we have time.
-  let count = 0;
-  if (availableReleased > 0) {
-    const slots = Math.floor(remaining / Math.max(len, 1));
-    count = Math.min(slots, maxEp - startEp + 1);
-  } else if (isAirDay) {
-    count = 1; // unreleased placeholder on air day only
-  } else {
-    return true;
-  }
-
-  if (count <= 0) return false;
-
-  for (let ii = 0; ii < count; ii++) {
-    const epNum = startEp + ii;
-    const key = `${show.id}:s${season}e${epNum}`;
-    const isUnreleased = epNum > releasedMax;
-    items.push({
-      show,
-      key,
-      episodeNum: epNum,
-      seasonNum: season,
-      epLength: len,
-      isNewAirday: isAirDay && ii === 0,
-      isUnreleased,
-      isTogether,
-      ...flags
+    // Preferred today = pinned via watchDays OR it's an air day (release day)
+    const preferredToday = active.filter(s => {
+      const wd = s.watchDays || [];
+      const ad = s.airDays || [];
+      const preferredByWatchDay = wd.includes(day) || wd.includes(dayFull);
+      const preferredByAirDay = ad.includes(day) || ad.includes(dayFull);
+      return preferredByWatchDay || preferredByAirDay;
     });
-  }
 
-  if (isTogether) togetherUsed += len * count; else soloUsed += len * count;
-  nextEp[show.id] = { ...nextEp[show.id], ep: startEp + count };
-  placed.add(show.id);
-  return true;
-};
+    // Auto shows = no watchDays set
+    const autoShows = active.filter(s => !s.watchDays || s.watchDays.length === 0);
 
-// 1) First try anything that rolled over from earlier days
-queuedSolo.forEach(s => {
-  const ok = placeShow(s, { isPinned:true });
-  if (!ok) carrySolo.push(s);
-});
-queuedTogether.forEach(s => {
-  const ok = placeShow(s, { isPinned:true });
-  if (!ok) carryTogether.push(s);
-});
+    // Sort so true air-day shows get first dibs on the day they release
+    const byAirDay = (a, b) => {
+      const aIsAir = (a.airDays || []).includes(day) || (a.airDays || []).includes(dayFull);
+      const bIsAir = (b.airDays || []).includes(day) || (b.airDays || []).includes(dayFull);
+      return (aIsAir ? 0 : 1) - (bIsAir ? 0 : 1);
+    };
+    preferredToday.sort(byAirDay);
+    autoShows.sort(byAirDay);
 
-// 2) Then try preferred shows for today; if they don’t fit, roll them forward
-preferredToday.forEach(s => {
-  if (placed.has(s.id)) return;
-  const ok = placeShow(s, { isPinned:true });
-  if (!ok) {
-    if (s.viewingMode === "together") carryTogether.push(s);
-    else carrySolo.push(s);
-  }
-});
+    // Returns true if placed OR nothing to schedule; false if it wanted to schedule but couldn't fit today
+    const placeShow = (show, flags) => {
+      if (placed.has(show.id)) return true;
 
-// 3) Then fill remaining time with auto shows
-autoShows.forEach(s => {
-  if (placed.has(s.id)) return;
-  placeShow(s, { isAuto:true });
-});
+      const st = showStats(show);
+      const len = st.episodeLength || 45;
 
-// Sort items: solo first, then together (grouped)
-items.sort((a,b) => (a.isTogether ? 1 : 0) - (b.isTogether ? 1 : 0));
+      const isTogether = show.viewingMode === "together";
+      const modeBudget = isTogether ? togetherBudget : soloBudget;
+      if (modeBudget <= 0) return false;
 
-const dayUsedMins = soloUsed + togetherUsed;
-sched[day].items = items;
-sched[day].usedMins = dayUsedMins;
-sched[day].soloUsed = soloUsed;
-sched[day].togetherUsed = togetherUsed;
-    // Sort items: solo first, then together (grouped)
-    items.sort((a,b) => (a.isTogether?1:0) - (b.isTogether?1:0));
-    const usedMins = soloUsed + togetherUsed;
-    sched[day].items = items; sched[day].usedMins = usedMins; sched[day].soloUsed = soloUsed; sched[day].togetherUsed = togetherUsed;
+      const modeUsed = isTogether ? togetherUsed : soloUsed;
+      const remaining = modeBudget - modeUsed;
+      if (remaining < len) return false;
+
+      const isAirDay = (show.airDays || []).includes(day) || (show.airDays || []).includes(dayFull);
+
+      const { ep: startEp, season, maxEp } = nextEp[show.id];
+      if (maxEp === 0 || startEp > maxEp) return true;
+
+      const releasedMax = st.episodesOutInCurrentSeason;
+      const availableReleased = Math.max(0, releasedMax - startEp + 1);
+
+      let count = 0;
+
+      if (availableReleased > 0) {
+        const slots = Math.floor(remaining / Math.max(len, 1));
+        count = Math.min(slots, maxEp - startEp + 1);
+      } else if (isAirDay) {
+        // Unreleased placeholder ONLY on actual air day, and only if we have time
+        count = 1;
+      } else {
+        return true;
+      }
+
+      if (count <= 0) return false;
+
+      for (let ii = 0; ii < count; ii++) {
+        const epNum = startEp + ii;
+        const key = `${show.id}:s${season}e${epNum}`;
+        const isUnreleased = epNum > releasedMax;
+
+        items.push({
+          show,
+          key,
+          episodeNum: epNum,
+          seasonNum: season,
+          epLength: len,
+          isNewAirday: isAirDay && ii === 0,
+          isUnreleased,
+          isTogether,
+          ...flags
+        });
+      }
+
+      if (isTogether) togetherUsed += len * count;
+      else soloUsed += len * count;
+
+      nextEp[show.id] = { ...nextEp[show.id], ep: startEp + count };
+      placed.add(show.id);
+      return true;
+    };
+
+    // 1) Place carryovers first (so preferred items roll forward)
+    queuedSolo.forEach(s => {
+      const ok = placeShow(s, { isPinned: true });
+      if (!ok) carrySolo.push(s);
+    });
+    queuedTogether.forEach(s => {
+      const ok = placeShow(s, { isPinned: true });
+      if (!ok) carryTogether.push(s);
+    });
+
+    // 2) Try preferred shows for today; if they can't fit, roll them forward
+    preferredToday.forEach(s => {
+      if (placed.has(s.id)) return;
+      const ok = placeShow(s, { isPinned: true });
+      if (!ok) {
+        if (s.viewingMode === "together") carryTogether.push(s);
+        else carrySolo.push(s);
+      }
+    });
+
+    // 3) Fill remaining time with auto shows
+    autoShows.forEach(s => {
+      if (placed.has(s.id)) return;
+      placeShow(s, { isAuto: true });
+    });
+
+    // Sort items: solo first, then together
+    items.sort((a, b) => (a.isTogether ? 1 : 0) - (b.isTogether ? 1 : 0));
+
+    const dayUsedMins = soloUsed + togetherUsed;
+    sched[day].items = items;
+    sched[day].usedMins = dayUsedMins;
+    sched[day].soloUsed = soloUsed;
+    sched[day].togetherUsed = togetherUsed;
   });
   // If watchedEps is provided (current week), advance projectedEp past any checked episodes
   // so that future-week projections start from the right place.
