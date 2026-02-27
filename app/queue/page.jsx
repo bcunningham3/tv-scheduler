@@ -102,8 +102,8 @@ function buildSchedule(shows, prefs, weekStart, today, startingEpOverride, watch
   });
   const sched = {};
   DAYS.forEach((day, i) => { sched[day] = { items:[], date:addDays(weekStart,i), usedMins:0 }; });
-  DAYS.forEach((day, dayIdx) => {
-    const dayDate = addDays(weekStart, dayIdx);
+  DAYS.forEach((day, i) => {
+  const dayDate = addDays(weekStart, i);
     if (today && dayDate < today) return;
     if (offDays.includes(day)) return;
     if (skippedDays && skippedDays.has(day)) return; // pulled forward — skip this day
@@ -125,16 +125,24 @@ if (!hasSolo && !hasTogether) {
   soloBudget = hasSolo ? Number(rawSolo) : 0;
   togetherBudget = hasTogether ? Number(rawTogether) : 0;
 }
-    const items = []; let soloUsed = 0; let togetherUsed = 0; const placed = new Set();
-    const pinnedHere = active.filter(s => s.watchDays && s.watchDays.includes(day));
-    const autoShows  = active.filter(s => !s.watchDays || s.watchDays.length === 0);
+const items = []; let soloUsed = 0; let togetherUsed = 0; const placed = new Set();
+
+const dayIdx = DAYS.indexOf(day);
+const dayFull = dayIdx >= 0 ? FULL_DAYS[dayIdx] : day;
+
+const pinnedHere = active.filter(s => {
+  const wd = s.watchDays || [];
+  return wd.includes(day) || wd.includes(dayFull);
+});
+
+const autoShows  = active.filter(s => !s.watchDays || s.watchDays.length === 0);
     const byAirDay = (a,b) => { const an=a.airDays&&a.airDays.includes(day)?0:1, bn=b.airDays&&b.airDays.includes(day)?0:1; return an-bn; };
     pinnedHere.sort(byAirDay);
     autoShows.sort(byAirDay);
     const placeShow = (show, flags, pinned) => {
       if (placed.has(show.id)) return;
       const st = showStats(show); const len = st.episodeLength || 45;
-      const isAirDay = show.airDays && show.airDays.includes(day);
+      const isAirDay = (show.airDays || []).includes(day) || (show.airDays || []).includes(dayFull);
       const { ep: startEp, season, maxEp } = nextEp[show.id];
       if (maxEp === 0 || startEp > maxEp) return;
       const releasedMax = st.episodesOutInCurrentSeason;
@@ -146,6 +154,11 @@ if (!hasSolo && !hasTogether) {
       const slots = budget > 0 ? Math.max(1, Math.floor(budget / Math.max(len,1))) : 0;
       const availableReleased = Math.max(0, releasedMax - startEp + 1);
       const count = availableReleased > 0 ? Math.min(slots, maxEp - startEp + 1) : isAirDay ? 1 : 0;
+const byAirDay = (a,b) => {
+  const an = (a.airDays||[]).includes(day) || (a.airDays||[]).includes(dayFull) ? 0 : 1;
+  const bn = (b.airDays||[]).includes(day) || (b.airDays||[]).includes(dayFull) ? 0 : 1;
+  return an - bn;
+};
       if (count <= 0) return;
       for (let i = 0; i < count; i++) {
         const epNum = startEp + i;
